@@ -15,8 +15,8 @@ import (
 )
 
 // pausePollInterval is how often a held task re-checks whether its queue has
-// resumed while it is paused/disabled.
-const pausePollInterval = time.Second
+// resumed while it is paused/disabled. It is a var so tests can shorten it.
+var pausePollInterval = time.Second
 
 // taskState tracks the live scheduling state of a single task.
 type taskState struct {
