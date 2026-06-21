@@ -20,10 +20,12 @@ import (
 )
 
 func main() {
+	// Flags take precedence; when unset they fall back to environment
+	// variables, mirroring how the Cloud SDK emulators are configured.
 	var (
-		host          = flag.String("host", "localhost", "host/address to bind the gRPC server to")
-		port          = flag.String("port", "8123", "port to listen on")
-		appEngineHost = flag.String("app-engine-host", "", "default base URL for App Engine HTTP task targets, e.g. http://localhost:8080")
+		host          = flag.String("host", envOr("CLOUD_TASKS_EMULATOR_HOST", "localhost"), "host/address to bind to (env: CLOUD_TASKS_EMULATOR_HOST)")
+		port          = flag.String("port", envOr("CLOUD_TASKS_EMULATOR_PORT", "8123"), "port to listen on (env: CLOUD_TASKS_EMULATOR_PORT)")
+		appEngineHost = flag.String("app-engine-host", envOr("CLOUD_TASKS_APP_ENGINE_HOST", ""), "default base URL for App Engine HTTP task targets (env: CLOUD_TASKS_APP_ENGINE_HOST)")
 	)
 	flag.Parse()
 
@@ -54,4 +56,12 @@ func main() {
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+// envOr returns the value of the environment variable key, or def if unset.
+func envOr(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok {
+		return v
+	}
+	return def
 }
