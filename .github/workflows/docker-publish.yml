@@ -19,7 +19,16 @@ jobs:
         with:
           go-version: "1.26"
       - run: go vet ./...
-      - run: go test ./...
+      - name: Test with 100% coverage gate
+        run: |
+          go test -race -coverprofile=cover.out ./...
+          total=$(go tool cover -func=cover.out | awk '/^total:/ {print $3}')
+          echo "total coverage: $total"
+          if [ "$total" != "100.0%" ]; then
+            echo "::error::coverage $total is below 100%"
+            go tool cover -func=cover.out | awk '$3!="100.0%"'
+            exit 1
+          fi
 
   publish:
     needs: test

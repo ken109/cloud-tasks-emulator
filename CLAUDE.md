@@ -16,6 +16,7 @@ Layout:
 - `internal/emulator/queue.go` — queue runtime: scheduling, retries, backoff,
   rate limiting, defaults.
 - `internal/emulator/dispatch.go` — HTTP delivery for HTTP / App Engine targets.
+- `internal/emulator/iam.go` — in-memory IAM policy methods.
 - `internal/emulator/naming.go` — resource-name parsing/validation.
 
 ## Commands
@@ -23,12 +24,17 @@ Layout:
 ```bash
 make build   # build the binary
 make test    # go test ./...
+make cover   # go test -race with coverage summary
 make vet     # go vet ./...
 make run     # build and run on localhost:8123
 make docker  # build the docker image
+make hooks   # install lefthook git hooks
 ```
 
-Always run `make test` and `gofmt -l .` before committing.
+Always run `make test` and `gofmt -l .` before committing. Keep the suite at
+**100% statement coverage** (`make cover`); CI fails the build below 100%.
+[lefthook](https://lefthook.dev) enforces `gofmt`/`go vet` on commit and the
+tests on push.
 
 ## Commit conventions
 
