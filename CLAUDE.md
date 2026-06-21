@@ -4,20 +4,26 @@ Guidance for working in this repository.
 
 ## Project
 
-`cloud-tasks-emulator` is an in-memory emulator for the Google Cloud Tasks v2
-gRPC API (`google.cloud.tasks.v2`), modelled after the official Cloud Pub/Sub
-emulator. It implements the queue/task RPCs and actually dispatches tasks over
-HTTP with retries, backoff, rate limiting and scheduling.
+`cloud-tasks-emulator` is an in-memory emulator for Google Cloud Tasks that
+serves both the `google.cloud.tasks.v2` and `google.cloud.tasks.v2beta3` gRPC
+APIs, modelled after the official Cloud Pub/Sub emulator. It actually dispatches
+tasks over HTTP with retries, backoff, rate limiting and scheduling.
+
+Architecture: a version-agnostic **core** engine holds all behaviour and state,
+and thin per-version **adapters** translate each protobuf surface to/from the
+core's neutral types. Add new behaviour in `core`; keep adapters as pure
+translation.
 
 Layout:
 
 - `main.go` — flag/env parsing and gRPC server bootstrap.
-- `emulator/server.go` — the `CloudTasksServer` RPC implementations.
-- `emulator/queue.go` — queue runtime: scheduling, retries, backoff,
-  rate limiting, defaults.
-- `emulator/dispatch.go` — HTTP delivery for HTTP / App Engine targets.
-- `emulator/iam.go` — in-memory IAM policy methods.
-- `emulator/naming.go` — resource-name parsing/validation.
+- `core/` — neutral engine: `types.go` (neutral resources), `engine.go`
+  (CRUD/validation/pagination/IAM), `queue.go` (scheduling, retries, backoff,
+  rate limiting, tombstones, TTL), `dispatch.go` (HTTP delivery, headers,
+  tokens), `naming.go` (resource-name parsing).
+- `emulator/emulator.go` — public API: `New(Config)` + `Register(*grpc.Server)`.
+- `emulator/v2.go`, `emulator/v2beta3.go` — the two gRPC adapters.
+- `emulator/conv.go` — shared proto↔core helpers.
 
 ## Commands
 

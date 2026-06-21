@@ -3,21 +3,23 @@
 A local, in-memory emulator for [Google Cloud Tasks](https://cloud.google.com/tasks),
 in the spirit of the official Cloud Pub/Sub emulator (`gcloud beta emulators pubsub`).
 
-It speaks the real `google.cloud.tasks.v2` gRPC API, so the official Cloud Tasks
-client libraries (Go, Python, Node.js, Java, ...) can talk to it unchanged — you
-just point them at the emulator's address over an insecure connection. Tasks are
-actually **dispatched**: when a task becomes due, the emulator makes the HTTP
-request to your target and applies the queue's retry/backoff and rate-limit
-policy, just like production.
+It serves the real **`google.cloud.tasks.v2`** *and* **`google.cloud.tasks.v2beta3`**
+gRPC APIs from a single shared engine, so the official Cloud Tasks client
+libraries (Go, Python, Node.js, Java, ...) can talk to it unchanged on either
+version — you just point them at the emulator's address over an insecure
+connection. Tasks are actually **dispatched**: when a task becomes due, the
+emulator makes the HTTP request to your target and applies the queue's
+retry/backoff and rate-limit policy, just like production.
 
 > Not affiliated with Google. Intended for local development and testing only —
 > all state is in memory and lost on restart.
 
 ## Features
 
-- Full v2 gRPC surface: `CreateQueue` / `GetQueue` / `ListQueues` / `UpdateQueue` /
-  `DeleteQueue` / `PurgeQueue` / `PauseQueue` / `ResumeQueue` and
-  `CreateTask` / `GetTask` / `ListTasks` / `DeleteTask` / `RunTask`.
+- Full v2 **and** v2beta3 gRPC surface: `CreateQueue` / `GetQueue` / `ListQueues` /
+  `UpdateQueue` / `DeleteQueue` / `PurgeQueue` / `PauseQueue` / `ResumeQueue`,
+  `CreateTask` / `GetTask` / `ListTasks` / `DeleteTask` / `RunTask`, and the IAM
+  methods — both versions served from one shared engine.
 - Real HTTP task dispatch for both **HTTP targets** (`HttpRequest`) and
   **App Engine targets** (`AppEngineHttpRequest`).
 - Full Cloud Tasks request headers, with the correct prefix per target type:
@@ -39,6 +41,10 @@ policy, just like production.
 - Task-name tombstones after deletion/completion and a task TTL, matching the
   Cloud Tasks lifecycle (both durations configurable).
 - Queue pause/resume/purge semantics.
+- **v2beta3 extras**: queue-level HTTP target overrides (`HttpTarget` with
+  `UriOverride`, header overrides and auth), per-queue `task_ttl` /
+  `tombstone_ttl`, `PULL` queues with `PullMessage` tasks (stored, not
+  auto-dispatched), and `QueueStats` (`tasks_count`).
 - In-memory IAM policy support (`GetIamPolicy` / `SetIamPolicy` /
   `TestIamPermissions`), like the Cloud Pub/Sub emulator.
 - Configuration via flags or environment variables.
@@ -181,20 +187,19 @@ image, get the mapped `8123` port, connect the official client to it.
 
 ### Go — embed in-process
 
-If you're already in Go, the emulator is a plain `google.cloud.tasks.v2` gRPC
-server, so you can run it in-process and skip Docker entirely:
+If you're already in Go, run the emulator in-process and skip Docker entirely.
+`Register` wires up both the v2 and v2beta3 services:
 
 ```go
 import (
     "google.golang.org/grpc"
     cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
-    taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
     "github.com/ken109/cloud-tasks-emulator/emulator"
 )
 
 lis, _ := net.Listen("tcp", "127.0.0.1:0")
 gs := grpc.NewServer()
-taskspb.RegisterCloudTasksServer(gs, emulator.NewServer(emulator.Config{}))
+emulator.New(emulator.Config{}).Register(gs) // serves v2 + v2beta3
 go gs.Serve(lis)
 defer gs.Stop()
 
@@ -221,11 +226,12 @@ client, _ := cloudtasks.NewClient(ctx, option.WithGRPCConn(conn))
 
 ## Scope and limitations
 
-- Targets the **stable `google.cloud.tasks.v2`** surface as published by the
-  official Go client (`cloud.google.com/go/cloudtasks/apiv2`). Fields and RPCs
-  that only exist in `v2beta3`/newer revisions — notably the queue-level
-  `Queue.http_target` override and the `BufferTask` RPC — are not part of this
-  API version and are therefore not implemented.
+- Implements the **`google.cloud.tasks.v2`** and **`google.cloud.tasks.v2beta3`**
+  surfaces as published by the official Go client
+  (`cloud.google.com/go/cloudtasks/apiv2` and `.../apiv2beta3`). The `BufferTask`
+  RPC and pull-lease operations (`LeaseTasks` / `AcknowledgeTask`, which live in
+  `v2beta2`) are outside these surfaces and are not implemented — `PULL` queues
+  and `PullMessage` tasks are stored but not leasable.
 - IAM policies are stored and returned but never **enforced** (same as the
   Cloud Pub/Sub emulator).
 - All state is in memory; nothing is persisted across restarts.
