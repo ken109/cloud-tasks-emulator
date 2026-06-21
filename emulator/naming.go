@@ -9,7 +9,11 @@ var (
 	locationNameRe = regexp.MustCompile(`^projects/([^/]+)/locations/([^/]+)$`)
 	queueNameRe    = regexp.MustCompile(`^projects/([^/]+)/locations/([^/]+)/queues/([^/]+)$`)
 	taskNameRe     = regexp.MustCompile(`^projects/([^/]+)/locations/([^/]+)/queues/([^/]+)/tasks/([^/]+)$`)
-	idRe           = regexp.MustCompile(`^[A-Za-z0-9_-]{1,500}$`)
+	// Task IDs allow letters, numbers, hyphens and underscores, up to 500 chars.
+	idRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,500}$`)
+	// Queue IDs allow letters, numbers and hyphens only (no underscore), up to
+	// 100 chars.
+	queueIDRe = regexp.MustCompile(`^[A-Za-z0-9-]{1,100}$`)
 )
 
 // parseLocationName validates a "projects/{p}/locations/{l}" resource name.

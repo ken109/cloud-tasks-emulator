@@ -25,9 +25,10 @@ const (
 // attemptInfo carries the per-attempt data needed to populate the Cloud Tasks
 // request headers.
 type attemptInfo struct {
-	number       int32  // 1-based attempt number
-	prevHTTPCode int    // HTTP status of the previous attempt, 0 if none
-	prevReason   string // retry reason recorded on the previous attempt
+	number         int32  // 1-based attempt number
+	executionCount int32  // prior attempts that received a handler response
+	prevHTTPCode   int    // HTTP status of the previous attempt, 0 if none
+	prevReason     string // retry reason recorded on the previous attempt
 }
 
 // dispatch performs the HTTP delivery for a task and returns an rpc status
@@ -139,7 +140,7 @@ func setSystemHeaders(req *http.Request, prefix string, queue *taskspb.Queue, ta
 	req.Header.Set(prefix+"-QueueName", queueID)
 	req.Header.Set(prefix+"-TaskName", taskID)
 	req.Header.Set(prefix+"-TaskRetryCount", strconv.Itoa(int(info.number-1)))
-	req.Header.Set(prefix+"-TaskExecutionCount", strconv.Itoa(int(info.number-1)))
+	req.Header.Set(prefix+"-TaskExecutionCount", strconv.Itoa(int(info.executionCount)))
 	req.Header.Set(prefix+"-TaskETA", fmt.Sprintf("%d.%06d", eta.Unix(), eta.Nanosecond()/1000))
 	if info.prevHTTPCode != 0 {
 		req.Header.Set(prefix+"-TaskPreviousResponse", strconv.Itoa(info.prevHTTPCode))

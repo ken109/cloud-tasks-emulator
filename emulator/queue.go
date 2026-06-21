@@ -128,9 +128,10 @@ func (qs *queueState) attempt(ts *taskState) {
 	task := ts.pb
 	scheduled := task.GetScheduleTime().AsTime()
 	info := attemptInfo{
-		number:       task.GetDispatchCount() + 1,
-		prevHTTPCode: ts.lastHTTPCode,
-		prevReason:   ts.lastRetryReason,
+		number:         task.GetDispatchCount() + 1,
+		executionCount: task.GetResponseCount(),
+		prevHTTPCode:   ts.lastHTTPCode,
+		prevReason:     ts.lastRetryReason,
 	}
 	taskCopy := proto.Clone(task).(*taskspb.Task)
 	queueCopy := proto.Clone(qs.pb).(*taskspb.Queue)
@@ -153,8 +154,13 @@ func (qs *queueState) attempt(ts *taskState) {
 		return
 	}
 
+	// Every attempt is dispatched; response_count only counts attempts that
+	// actually received a response from the handler (a transport error yields
+	// httpCode 0). This keeps TaskExecutionCount distinct from TaskRetryCount.
 	task.DispatchCount++
-	task.ResponseCount++
+	if httpCode != 0 {
+		task.ResponseCount++
+	}
 	task.LastAttempt = att
 	if task.FirstAttempt == nil {
 		task.FirstAttempt = &taskspb.Attempt{
@@ -186,19 +192,30 @@ func (qs *queueState) attempt(ts *taskState) {
 }
 
 // shouldRetry reports whether a failed task has retries remaining. mu held.
+//
+// Per the Cloud Tasks RetryConfig docs, retrying stops only when both
+// maxAttempts and maxRetryDuration are satisfied. A limit set to "unlimited"
+// (maxAttempts == -1, or maxRetryDuration <= 0) never constrains, so when both
+// limits are set the task retries until the *later* of the two is reached, and
+// when neither is set it retries indefinitely (bounded only by the task TTL).
 func (qs *queueState) shouldRetry(task *taskspb.Task, ts *taskState) bool {
 	rc := qs.pb.GetRetryConfig()
 	maxAttempts := rc.GetMaxAttempts()
-	// -1 means unlimited.
-	if maxAttempts != -1 && task.GetDispatchCount() >= maxAttempts {
-		return false
+	maxDuration := rc.GetMaxRetryDuration().AsDuration()
+
+	attemptsLimited := maxAttempts != -1
+	durationLimited := maxDuration > 0
+	if !attemptsLimited && !durationLimited {
+		return true // unlimited retries
 	}
-	if d := rc.GetMaxRetryDuration().AsDuration(); d > 0 {
-		if time.Since(ts.firstScheduleTime) >= d {
-			return false
-		}
+	// Keep retrying while any constraining limit has not yet been reached.
+	if attemptsLimited && task.GetDispatchCount() < maxAttempts {
+		return true
 	}
-	return true
+	if durationLimited && time.Since(ts.firstScheduleTime) < maxDuration {
+		return true
+	}
+	return false
 }
 
 // backoff computes the delay before the Nth retry following Cloud Tasks rules.
