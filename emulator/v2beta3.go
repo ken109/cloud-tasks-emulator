@@ -179,7 +179,7 @@ func v2beta3QueueToCore(q *taskspb.Queue) *core.Queue {
 		}
 	}
 	if aeq := q.GetAppEngineHttpQueue(); aeq != nil {
-		c.AppEngineHostOverride = aeq.GetAppEngineRoutingOverride().GetHost()
+		c.AppEngineRoutingOverride = v2beta3RoutingToCore(aeq.GetAppEngineRoutingOverride())
 	}
 	c.HTTPOverride = v2beta3HTTPOverrideToCore(q.GetHttpTarget())
 	return c
@@ -211,9 +211,9 @@ func v2beta3QueueFromCore(q *core.Queue) *taskspb.Queue {
 	} else {
 		out.Type = taskspb.Queue_PUSH
 	}
-	if q.AppEngineHostOverride != "" {
+	if q.AppEngineRoutingOverride != nil {
 		out.QueueType = &taskspb.Queue_AppEngineHttpQueue{AppEngineHttpQueue: &taskspb.AppEngineHttpQueue{
-			AppEngineRoutingOverride: &taskspb.AppEngineRouting{Host: q.AppEngineHostOverride},
+			AppEngineRoutingOverride: v2beta3RoutingFromCore(q.AppEngineRoutingOverride),
 		}}
 	}
 	if q.HTTPOverride != nil {
@@ -243,7 +243,11 @@ func v2beta3HTTPOverrideToCore(h *taskspb.HttpTarget) *core.HTTPOverride {
 	if h == nil {
 		return nil
 	}
-	o := &core.HTTPOverride{Method: httpMethodName(int32(h.GetHttpMethod()))}
+	o := &core.HTTPOverride{}
+	// Preserve "unspecified" (don't fabricate POST) so GetQueue round-trips.
+	if m := h.GetHttpMethod(); m != taskspb.HttpMethod_HTTP_METHOD_UNSPECIFIED {
+		o.Method = httpMethodName(int32(m))
+	}
 	if uo := h.GetUriOverride(); uo != nil {
 		switch uo.GetScheme() {
 		case taskspb.UriOverride_HTTP:
@@ -270,7 +274,10 @@ func v2beta3HTTPOverrideToCore(h *taskspb.HttpTarget) *core.HTTPOverride {
 }
 
 func v2beta3HTTPOverrideFromCore(o *core.HTTPOverride) *taskspb.HttpTarget {
-	h := &taskspb.HttpTarget{HttpMethod: taskspb.HttpMethod(httpMethodEnum(o.Method))}
+	h := &taskspb.HttpTarget{}
+	if o.Method != "" {
+		h.HttpMethod = taskspb.HttpMethod(httpMethodEnum(o.Method))
+	}
 	uo := &taskspb.UriOverride{}
 	hasURI := false
 	switch o.Scheme {
