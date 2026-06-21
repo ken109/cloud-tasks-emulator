@@ -1,0 +1,18 @@
+# https://lefthook.dev
+# Install the hooks with: lefthook install
+
+pre-commit:
+  parallel: true
+  commands:
+    gofmt:
+      glob: "*.go"
+      run: test -z "$(gofmt -l {staged_files})"
+      fail_text: "Go files are not formatted. Run: gofmt -w ."
+    vet:
+      glob: "*.go"
+      run: go vet ./...
+
+pre-push:
+  commands:
+    test:
+      run: go test ./...
