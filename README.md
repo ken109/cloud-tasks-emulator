@@ -150,10 +150,39 @@ const client = new CloudTasksClient({
 });
 ```
 
-## Embedding in Go tests
+## Using in tests
 
-The emulator is a plain `google.cloud.tasks.v2` gRPC server, so you can run it
-in-process and point the official client at it — no separate binary needed:
+### Any language — Testcontainers (recommended)
+
+For integration tests in **any** language, the simplest and most portable option
+is to run the published image with [Testcontainers](https://testcontainers.com/):
+spin up `ghcr.io/ken109/cloud-tasks-emulator` as a container, read its mapped
+port, and point the official Cloud Tasks client at it over an insecure gRPC
+connection. Testcontainers has modules for Java, Go, Python, Node.js, .NET, Rust
+and more, so the same approach works regardless of your stack.
+
+```go
+// Go example using github.com/testcontainers/testcontainers-go
+ctr, _ := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+    ContainerRequest: testcontainers.ContainerRequest{
+        Image:        "ghcr.io/ken109/cloud-tasks-emulator:latest",
+        Cmd:          []string{"-host", "0.0.0.0", "-port", "8123"},
+        ExposedPorts: []string{"8123/tcp"},
+        WaitingFor:   wait.ForListeningPort("8123/tcp"),
+    },
+    Started: true,
+})
+endpoint, _ := ctr.PortEndpoint(ctx, "8123/tcp", "")
+// dial `endpoint` with insecure gRPC, then use the official Cloud Tasks client
+```
+
+The equivalent in Java/Python/Node/etc. is the same three steps: start the
+image, get the mapped `8123` port, connect the official client to it.
+
+### Go — embed in-process
+
+If you're already in Go, the emulator is a plain `google.cloud.tasks.v2` gRPC
+server, so you can run it in-process and skip Docker entirely:
 
 ```go
 import (

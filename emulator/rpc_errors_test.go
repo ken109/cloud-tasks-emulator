@@ -47,6 +47,13 @@ func TestQueueRPCErrors(t *testing.T) {
 	_, err = c.CreateQueue(ctx, &taskspb.CreateQueueRequest{Parent: locationPath(), Queue: &taskspb.Queue{Name: "bad-name"}})
 	wantCode(t, err, codes.InvalidArgument, "CreateQueue invalid name")
 
+	// Queue id with an underscore is invalid (queue ids forbid underscores).
+	_, err = c.CreateQueue(ctx, &taskspb.CreateQueueRequest{
+		Parent: locationPath(),
+		Queue:  &taskspb.Queue{Name: locationPath() + "/queues/bad_id"},
+	})
+	wantCode(t, err, codes.InvalidArgument, "CreateQueue invalid queue id")
+
 	_, err = c.CreateQueue(ctx, &taskspb.CreateQueueRequest{
 		Parent: locationPath(),
 		Queue:  &taskspb.Queue{Name: "projects/other/locations/l/queues/q"},
@@ -204,13 +211,17 @@ func TestFullViewReturnsBodyAndHeaders(t *testing.T) {
 		t.Errorf("FULL view body = %q, want payload", body)
 	}
 
-	// BASIC view (default) strips body + headers.
+	// BASIC view (default) keeps HttpRequest body/headers: per the Task.View
+	// docs only the AppEngineHttpRequest body is omitted in BASIC.
 	basic, err := c.GetTask(ctx, &taskspb.GetTaskRequest{Name: created.GetName()})
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if basic.GetHttpRequest().GetBody() != nil || basic.GetHttpRequest().GetHeaders() != nil {
-		t.Error("BASIC view should omit body and headers")
+	if string(basic.GetHttpRequest().GetBody()) != "payload" {
+		t.Errorf("BASIC view should keep HTTP body, got %q", basic.GetHttpRequest().GetBody())
+	}
+	if basic.GetView() != taskspb.Task_BASIC {
+		t.Errorf("view = %v, want BASIC", basic.GetView())
 	}
 
 	// FULL via ListTasks.
@@ -240,6 +251,10 @@ func TestAppEngineBasicViewStrip(t *testing.T) {
 	}
 	if created.GetAppEngineHttpRequest().GetBody() != nil {
 		t.Error("BASIC view should strip app engine body")
+	}
+	// Headers are NOT stripped in BASIC (only the body is).
+	if created.GetAppEngineHttpRequest().GetHeaders()["k"] != "v" {
+		t.Error("BASIC view should keep app engine headers")
 	}
 }
 

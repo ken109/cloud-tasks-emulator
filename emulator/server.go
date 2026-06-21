@@ -31,15 +31,18 @@ type Config struct {
 	// (Cloud Tasks: 31 days). Zero uses the default.
 	TaskTTL time.Duration
 	// TombstoneTTL is how long a created task's name is reserved after the task
-	// completes or is deleted, preventing immediate reuse (Cloud Tasks: ~1h).
-	// Zero uses the default; a negative value disables tombstones.
+	// completes or is deleted, preventing immediate reuse. The Cloud Tasks docs
+	// say a deleted task name can take up to 24 hours to be released (longer for
+	// queue.yaml-managed queues). Zero uses the default; a negative value
+	// disables tombstones.
 	TombstoneTTL time.Duration
 }
 
-// Default lifecycle durations matching Cloud Tasks.
+// Default lifecycle durations matching Cloud Tasks: tasks live up to 31 days,
+// and a deleted/completed task name is reserved for up to 24 hours.
 const (
 	defaultTaskTTL      = 31 * 24 * time.Hour
-	defaultTombstoneTTL = time.Hour
+	defaultTombstoneTTL = 24 * time.Hour
 )
 
 // Server implements taskspb.CloudTasksServer backed by in-memory state.
@@ -128,8 +131,12 @@ func (s *Server) CreateQueue(_ context.Context, req *taskspb.CreateQueueRequest)
 	if q == nil || q.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "queue.name is required")
 	}
-	if _, _, _, ok := parseQueueName(q.GetName()); !ok {
+	_, _, queueID, ok := parseQueueName(q.GetName())
+	if !ok {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid queue name %q", q.GetName())
+	}
+	if !queueIDRe.MatchString(queueID) {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid queue id %q: must match %s", queueID, queueIDRe)
 	}
 	if queueParent(q.GetName()) != req.GetParent() {
 		return nil, status.Error(codes.InvalidArgument, "queue name does not match parent")
@@ -359,7 +366,8 @@ const (
 	maxAppEngineTaskBodySize = 100 * 1024  // 100 KiB for App Engine targets
 	maxScheduleAhead         = 30 * 24 * time.Hour
 	minDispatchDeadline      = 15 * time.Second
-	maxDispatchDeadline      = 30 * time.Minute
+	maxHTTPDispatchDeadline  = 30 * time.Minute              // HTTP targets
+	maxAppEngineDeadline     = 24*time.Hour + 15*time.Second // App Engine targets
 )
 
 // validateCreateTask enforces the documented size, schedule and deadline limits.
@@ -367,12 +375,19 @@ func validateCreateTask(task *taskspb.Task) error {
 	if st := task.GetScheduleTime(); st != nil && st.AsTime().After(time.Now().Add(maxScheduleAhead)) {
 		return status.Error(codes.InvalidArgument, "schedule_time must not be more than 30 days in the future")
 	}
+
+	// The dispatch_deadline range depends on the target type.
+	maxDeadline := maxHTTPDispatchDeadline
+	if _, ok := task.GetMessageType().(*taskspb.Task_AppEngineHttpRequest); ok {
+		maxDeadline = maxAppEngineDeadline
+	}
 	if dd := task.GetDispatchDeadline(); dd != nil {
 		d := dd.AsDuration()
-		if d < minDispatchDeadline || d > maxDispatchDeadline {
-			return status.Error(codes.InvalidArgument, "dispatch_deadline must be between 15s and 30m")
+		if d < minDispatchDeadline || d > maxDeadline {
+			return status.Errorf(codes.InvalidArgument, "dispatch_deadline must be between %s and %s", minDispatchDeadline, maxDeadline)
 		}
 	}
+
 	switch mt := task.GetMessageType().(type) {
 	case *taskspb.Task_HttpRequest:
 		if len(mt.HttpRequest.GetBody()) > maxHTTPTaskBodySize {
@@ -520,7 +535,8 @@ func taskQueueOf(taskName string) string {
 }
 
 // viewTask returns a copy of the task respecting the requested response view.
-// In BASIC view the request body and headers are omitted.
+// Per the Task.View docs, the BASIC view omits only the AppEngineHttpRequest
+// body; all other fields (including HttpRequest body/headers) are returned.
 func viewTask(t *taskspb.Task, view taskspb.Task_View) *taskspb.Task {
 	out := proto.Clone(t).(*taskspb.Task)
 	if view == taskspb.Task_FULL {
@@ -528,13 +544,8 @@ func viewTask(t *taskspb.Task, view taskspb.Task_View) *taskspb.Task {
 		return out
 	}
 	out.View = taskspb.Task_BASIC
-	switch mt := out.GetMessageType().(type) {
-	case *taskspb.Task_HttpRequest:
-		mt.HttpRequest.Body = nil
-		mt.HttpRequest.Headers = nil
-	case *taskspb.Task_AppEngineHttpRequest:
+	if mt, ok := out.GetMessageType().(*taskspb.Task_AppEngineHttpRequest); ok {
 		mt.AppEngineHttpRequest.Body = nil
-		mt.AppEngineHttpRequest.Headers = nil
 	}
 	return out
 }

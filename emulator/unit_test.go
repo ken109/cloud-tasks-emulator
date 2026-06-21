@@ -142,9 +142,12 @@ func TestBuildRequestVariants(t *testing.T) {
 			HttpMethod:       taskspb.HttpMethod_GET,
 		}},
 	}
-	req, err := s.buildRequest(queue, aeTask, attemptInfo{number: 2, prevHTTPCode: 503, prevReason: "RETURNED_503"})
+	req, err := s.buildRequest(queue, aeTask, attemptInfo{number: 2, executionCount: 1, prevHTTPCode: 503, prevReason: "RETURNED_503"})
 	if err != nil || req.URL.String() != "http://svc/work" {
 		t.Fatalf("app engine request: %v / %v", req, err)
+	}
+	if req.Header.Get("X-AppEngine-TaskRetryCount") != "1" || req.Header.Get("X-AppEngine-TaskExecutionCount") != "1" {
+		t.Errorf("app engine retry/execution headers = %q/%q", req.Header.Get("X-AppEngine-TaskRetryCount"), req.Header.Get("X-AppEngine-TaskExecutionCount"))
 	}
 	if req.Header.Get("User-Agent") != appEngineUserAgent {
 		t.Errorf("app engine UA = %q", req.Header.Get("User-Agent"))
@@ -185,8 +188,11 @@ func TestBuildRequestVariants(t *testing.T) {
 	if req.Header.Get("X-CloudTasks-QueueName") != "q" || req.Header.Get("X-CloudTasks-TaskName") != "42" {
 		t.Error("missing system headers")
 	}
-	if req.Header.Get("X-CloudTasks-TaskRetryCount") != "2" || req.Header.Get("X-CloudTasks-TaskExecutionCount") != "2" {
-		t.Errorf("retry/execution count headers wrong")
+	if req.Header.Get("X-CloudTasks-TaskRetryCount") != "2" {
+		t.Errorf("retry count header = %q, want 2", req.Header.Get("X-CloudTasks-TaskRetryCount"))
+	}
+	if req.Header.Get("X-CloudTasks-TaskExecutionCount") != "0" {
+		t.Errorf("execution count header = %q, want 0", req.Header.Get("X-CloudTasks-TaskExecutionCount"))
 	}
 	// First attempt -> no previous-response headers.
 	if req.Header.Get("X-CloudTasks-TaskPreviousResponse") != "" {
@@ -496,6 +502,26 @@ func TestShouldRetryAndBackoff(t *testing.T) {
 	ts2 := &taskState{pb: &taskspb.Task{DispatchCount: 1}, firstScheduleTime: time.Now()}
 	if !qs.shouldRetry(ts2.pb, ts2) {
 		t.Error("should retry within limits")
+	}
+
+	// Both limits unlimited (-1 attempts, 0 duration) -> retry forever.
+	qs.pb.RetryConfig = &taskspb.RetryConfig{MaxAttempts: -1}
+	tsInf := &taskState{pb: &taskspb.Task{DispatchCount: 1_000_000}, firstScheduleTime: time.Now().Add(-time.Hour)}
+	if !qs.shouldRetry(tsInf.pb, tsInf) {
+		t.Error("unlimited config should always retry")
+	}
+
+	// Both limits set: attempts exhausted but duration not yet reached -> keep
+	// retrying until BOTH are satisfied.
+	qs.pb.RetryConfig = &taskspb.RetryConfig{MaxAttempts: 2, MaxRetryDuration: durationpb.New(time.Hour)}
+	tsBoth := &taskState{pb: &taskspb.Task{DispatchCount: 5}, firstScheduleTime: time.Now()}
+	if !qs.shouldRetry(tsBoth.pb, tsBoth) {
+		t.Error("should keep retrying until both attempts and duration limits are reached")
+	}
+	// Both satisfied -> stop.
+	tsDone := &taskState{pb: &taskspb.Task{DispatchCount: 5}, firstScheduleTime: time.Now().Add(-2 * time.Hour)}
+	if qs.shouldRetry(tsDone.pb, tsDone) {
+		t.Error("should stop once both limits are reached")
 	}
 
 	// Backoff: exponential, then linear, then clamped/overflow.
