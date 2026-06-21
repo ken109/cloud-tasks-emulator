@@ -219,6 +219,23 @@ client, _ := cloudtasks.NewClient(ctx, option.WithGRPCConn(conn))
   supported: policies are stored in memory per queue and round-trip like the
   Cloud Pub/Sub emulator, but are never enforced.
 
+## Scope and limitations
+
+- Targets the **stable `google.cloud.tasks.v2`** surface as published by the
+  official Go client (`cloud.google.com/go/cloudtasks/apiv2`). Fields and RPCs
+  that only exist in `v2beta3`/newer revisions — notably the queue-level
+  `Queue.http_target` override and the `BufferTask` RPC — are not part of this
+  API version and are therefore not implemented.
+- IAM policies are stored and returned but never **enforced** (same as the
+  Cloud Pub/Sub emulator).
+- All state is in memory; nothing is persisted across restarts.
+- `ListQueues` ignores the `filter` argument (all queues in the parent are
+  returned, paginated).
+- OIDC tokens are unsigned (`alg=none`) JWTs — the emulator cannot mint
+  Google-signed tokens — and OAuth tokens are placeholders.
+- App Engine 503 "slow down delivery" pacing is not modelled; the emulator
+  dispatches immediately and treats any non-2xx as a retryable failure.
+
 ## Development
 
 ```bash
