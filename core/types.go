@@ -109,8 +109,9 @@ type Queue struct {
 	TaskTTL      time.Duration
 	TombstoneTTL time.Duration
 	Pull         bool // PULL-type queue: tasks are not auto-dispatched
-	// AppEngineHostOverride is the queue-level App Engine routing host override.
-	AppEngineHostOverride string
+	// AppEngineRoutingOverride is the queue-level App Engine routing override
+	// (service/version/instance/host).
+	AppEngineRoutingOverride *AppEngineRouting
 	// HTTPOverride is the queue-level HTTP target override (v2beta3).
 	HTTPOverride *HTTPOverride
 	PurgeTime    time.Time

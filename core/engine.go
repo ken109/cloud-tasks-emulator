@@ -175,7 +175,7 @@ func (e *Engine) UpdateQueue(q *Queue, fields []QueueField) (*Queue, error) {
 		case FieldRetryConfig:
 			qs.q.RetryConfig = q.RetryConfig
 		case FieldAppEngineRoutingOverride:
-			qs.q.AppEngineHostOverride = q.AppEngineHostOverride
+			qs.q.AppEngineRoutingOverride = q.AppEngineRoutingOverride
 		case FieldHTTPOverride:
 			qs.q.HTTPOverride = q.HTTPOverride
 		}
@@ -444,6 +444,10 @@ func (qs *queueState) snapshotLocked() *Queue {
 	if qs.q.HTTPOverride != nil {
 		ov := *qs.q.HTTPOverride
 		c.HTTPOverride = &ov
+	}
+	if qs.q.AppEngineRoutingOverride != nil {
+		r := *qs.q.AppEngineRoutingOverride
+		c.AppEngineRoutingOverride = &r
 	}
 	return &c
 }

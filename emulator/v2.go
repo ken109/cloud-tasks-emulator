@@ -156,9 +156,9 @@ func v2QueueToCore(q *taskspb.Queue) *core.Queue {
 		return nil
 	}
 	c := &core.Queue{
-		Name:                  q.GetName(),
-		State:                 v2StateToCore(q.GetState()),
-		AppEngineHostOverride: q.GetAppEngineRoutingOverride().GetHost(),
+		Name:                     q.GetName(),
+		State:                    v2StateToCore(q.GetState()),
+		AppEngineRoutingOverride: v2RoutingToCore(q.GetAppEngineRoutingOverride()),
 	}
 	if rl := q.GetRateLimits(); rl != nil {
 		c.RateLimits = core.RateLimits{
@@ -196,8 +196,8 @@ func v2QueueFromCore(q *core.Queue) *taskspb.Queue {
 		},
 		PurgeTime: timeToTs(q.PurgeTime),
 	}
-	if q.AppEngineHostOverride != "" {
-		out.AppEngineRoutingOverride = &taskspb.AppEngineRouting{Host: q.AppEngineHostOverride}
+	if q.AppEngineRoutingOverride != nil {
+		out.AppEngineRoutingOverride = v2RoutingFromCore(q.AppEngineRoutingOverride)
 	}
 	return out
 }

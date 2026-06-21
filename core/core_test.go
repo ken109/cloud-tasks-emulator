@@ -163,7 +163,7 @@ func TestAppEngineHostResolution(t *testing.T) {
 	if e.appEngineHost(&Queue{}, &Task{Target: Target{AppEngineRouting: &AppEngineRouting{Host: "http://task"}}}) != "http://task" {
 		t.Error("task host")
 	}
-	if e.appEngineHost(&Queue{AppEngineHostOverride: "http://q"}, &Task{}) != "http://q" {
+	if e.appEngineHost(&Queue{AppEngineRoutingOverride: &AppEngineRouting{Host: "http://q"}}, &Task{}) != "http://q" {
 		t.Error("queue host")
 	}
 	if e.appEngineHost(&Queue{}, &Task{}) != "http://def" {
@@ -528,9 +528,9 @@ func TestEngineUpdateQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	// each field + empty mask
-	q := &Queue{Name: name, RateLimits: RateLimits{MaxDispatchesPerSecond: 5}, RetryConfig: RetryConfig{MaxAttempts: 9}, AppEngineHostOverride: "http://a", HTTPOverride: &HTTPOverride{Host: "h"}}
+	q := &Queue{Name: name, RateLimits: RateLimits{MaxDispatchesPerSecond: 5}, RetryConfig: RetryConfig{MaxAttempts: 9}, AppEngineRoutingOverride: &AppEngineRouting{Host: "http://a"}, HTTPOverride: &HTTPOverride{Host: "h"}}
 	got, err := e.UpdateQueue(q, []QueueField{FieldRateLimits, FieldRetryConfig, FieldAppEngineRoutingOverride, FieldHTTPOverride})
-	if err != nil || got.RetryConfig.MaxAttempts != 9 || got.AppEngineHostOverride != "http://a" || got.HTTPOverride == nil {
+	if err != nil || got.RetryConfig.MaxAttempts != 9 || got.AppEngineRoutingOverride.Host != "http://a" || got.HTTPOverride == nil {
 		t.Fatalf("update fields %+v %v", got, err)
 	}
 	if _, err := e.UpdateQueue(q, nil); err != nil { // empty mask = all

@@ -126,8 +126,8 @@ func (e *Engine) appEngineHost(q *Queue, t *Task) string {
 	if r := t.Target.AppEngineRouting; r != nil && r.Host != "" {
 		return r.Host
 	}
-	if q.AppEngineHostOverride != "" {
-		return q.AppEngineHostOverride
+	if o := q.AppEngineRoutingOverride; o != nil && o.Host != "" {
+		return o.Host
 	}
 	return e.defaultAppEngineHost
 }

@@ -171,7 +171,7 @@ func TestV2Converters(t *testing.T) {
 		RetryConfig:              &taskspbv2.RetryConfig{MaxAttempts: 3, MaxRetryDuration: durationpb.New(time.Minute), MinBackoff: durationpb.New(time.Second), MaxBackoff: durationpb.New(time.Hour), MaxDoublings: 4},
 		AppEngineRoutingOverride: &taskspbv2.AppEngineRouting{Host: "h"},
 	})
-	if cq.State != core.StateDisabled || cq.AppEngineHostOverride != "h" || cq.RetryConfig.MaxAttempts != 3 {
+	if cq.State != core.StateDisabled || cq.AppEngineRoutingOverride.Host != "h" || cq.RetryConfig.MaxAttempts != 3 {
 		t.Errorf("v2QueueToCore = %+v", cq)
 	}
 	if v2QueueToCore(nil) != nil {
@@ -370,10 +370,10 @@ func TestV2beta3Converters(t *testing.T) {
 		RetryConfig:  &taskspbv2beta3.RetryConfig{MaxAttempts: 3, MaxRetryDuration: durationpb.New(time.Minute), MinBackoff: durationpb.New(time.Second), MaxBackoff: durationpb.New(time.Hour), MaxDoublings: 4},
 		QueueType:    &taskspbv2beta3.Queue_AppEngineHttpQueue{AppEngineHttpQueue: &taskspbv2beta3.AppEngineHttpQueue{AppEngineRoutingOverride: &taskspbv2beta3.AppEngineRouting{Host: "h"}}},
 	})
-	if !cq.Pull || cq.State != core.StateDisabled || cq.TaskTTL != time.Hour || cq.AppEngineHostOverride != "h" {
+	if !cq.Pull || cq.State != core.StateDisabled || cq.TaskTTL != time.Hour || cq.AppEngineRoutingOverride.Host != "h" {
 		t.Errorf("v2beta3QueueToCore = %+v", cq)
 	}
-	out := v2beta3QueueFromCore(&core.Queue{Name: "n", State: core.StatePaused, Pull: true, AppEngineHostOverride: "h", HTTPOverride: &core.HTTPOverride{Host: "x"}, TasksCount: 2})
+	out := v2beta3QueueFromCore(&core.Queue{Name: "n", State: core.StatePaused, Pull: true, AppEngineRoutingOverride: &core.AppEngineRouting{Host: "h"}, HTTPOverride: &core.HTTPOverride{Host: "x"}, TasksCount: 2})
 	if out.GetType() != taskspbv2beta3.Queue_PULL || out.GetStats().GetTasksCount() != 2 || out.GetAppEngineHttpQueue() == nil || out.GetHttpTarget() == nil {
 		t.Errorf("v2beta3QueueFromCore = %+v", out)
 	}
