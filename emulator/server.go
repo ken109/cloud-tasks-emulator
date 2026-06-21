@@ -5,6 +5,7 @@ package emulator
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"sort"
@@ -26,8 +27,20 @@ type Config struct {
 	// DefaultAppEngineHost is the base URL used to dispatch AppEngineHttpRequest
 	// tasks when no host is given on the task or queue.
 	DefaultAppEngineHost string
-	// HardResetOnPurge is unused placeholder for future options.
+	// TaskTTL is how long a task may live before it is automatically deleted
+	// (Cloud Tasks: 31 days). Zero uses the default.
+	TaskTTL time.Duration
+	// TombstoneTTL is how long a created task's name is reserved after the task
+	// completes or is deleted, preventing immediate reuse (Cloud Tasks: ~1h).
+	// Zero uses the default; a negative value disables tombstones.
+	TombstoneTTL time.Duration
 }
+
+// Default lifecycle durations matching Cloud Tasks.
+const (
+	defaultTaskTTL      = 31 * 24 * time.Hour
+	defaultTombstoneTTL = time.Hour
+)
 
 // Server implements taskspb.CloudTasksServer backed by in-memory state.
 type Server struct {
@@ -39,15 +52,32 @@ type Server struct {
 
 	httpClient           *http.Client
 	defaultAppEngineHost string
+	taskTTL              time.Duration
+	tombstoneTTL         time.Duration
 }
 
 // NewServer constructs an emulator Server.
 func NewServer(cfg Config) *Server {
+	taskTTL := cfg.TaskTTL
+	if taskTTL == 0 {
+		taskTTL = defaultTaskTTL
+	}
+	tombstoneTTL := cfg.TombstoneTTL
+	if tombstoneTTL == 0 {
+		tombstoneTTL = defaultTombstoneTTL
+	}
 	return &Server{
-		queues:               map[string]*queueState{},
-		policies:             map[string]*iampb.Policy{},
-		httpClient:           &http.Client{},
+		queues:   map[string]*queueState{},
+		policies: map[string]*iampb.Policy{},
+		httpClient: &http.Client{
+			// Cloud Tasks does not follow redirects; a 3xx is a failed dispatch.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 		defaultAppEngineHost: cfg.DefaultAppEngineHost,
+		taskTTL:              taskTTL,
+		tombstoneTTL:         tombstoneTTL,
 	}
 }
 
@@ -69,8 +99,12 @@ func (s *Server) ListQueues(_ context.Context, req *taskspb.ListQueuesRequest) (
 	}
 	sort.Strings(names)
 
-	resp := &taskspb.ListQueuesResponse{}
-	for _, name := range names {
+	page, next, err := paginate(names, req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, err
+	}
+	resp := &taskspb.ListQueuesResponse{NextPageToken: next}
+	for _, name := range page {
 		resp.Queues = append(resp.Queues, s.queues[name].snapshot())
 	}
 	return resp, nil
@@ -225,8 +259,12 @@ func (s *Server) ListTasks(_ context.Context, req *taskspb.ListTasksRequest) (*t
 	}
 	sort.Strings(names)
 
-	resp := &taskspb.ListTasksResponse{}
-	for _, name := range names {
+	page, next, err := paginate(names, req.GetPageSize(), req.GetPageToken())
+	if err != nil {
+		return nil, err
+	}
+	resp := &taskspb.ListTasksResponse{NextPageToken: next}
+	for _, name := range page {
 		resp.Tasks = append(resp.Tasks, viewTask(qs.tasks[name].pb, req.GetResponseView()))
 	}
 	return resp, nil
@@ -263,6 +301,9 @@ func (s *Server) CreateTask(_ context.Context, req *taskspb.CreateTaskRequest) (
 	}
 	if task.GetMessageType() == nil {
 		return nil, status.Error(codes.InvalidArgument, "task must specify an http_request or app_engine_http_request")
+	}
+	if err := validateCreateTask(task); err != nil {
+		return nil, err
 	}
 
 	s.mu.Lock()
@@ -304,9 +345,45 @@ func (s *Server) CreateTask(_ context.Context, req *taskspb.CreateTaskRequest) (
 	if _, exists := qs.tasks[task.GetName()]; exists {
 		return nil, status.Errorf(codes.AlreadyExists, "task %q already exists", task.GetName())
 	}
+	if qs.tombstoned(task.GetName()) {
+		return nil, status.Errorf(codes.AlreadyExists, "task %q was recently deleted and its name is still reserved", task.GetName())
+	}
 	ts := &taskState{pb: task}
 	qs.addTask(ts)
 	return viewTask(task, req.GetResponseView()), nil
+}
+
+// Cloud Tasks resource limits enforced at task creation.
+const (
+	maxHTTPTaskBodySize      = 1024 * 1024 // 1 MiB for HTTP targets
+	maxAppEngineTaskBodySize = 100 * 1024  // 100 KiB for App Engine targets
+	maxScheduleAhead         = 30 * 24 * time.Hour
+	minDispatchDeadline      = 15 * time.Second
+	maxDispatchDeadline      = 30 * time.Minute
+)
+
+// validateCreateTask enforces the documented size, schedule and deadline limits.
+func validateCreateTask(task *taskspb.Task) error {
+	if st := task.GetScheduleTime(); st != nil && st.AsTime().After(time.Now().Add(maxScheduleAhead)) {
+		return status.Error(codes.InvalidArgument, "schedule_time must not be more than 30 days in the future")
+	}
+	if dd := task.GetDispatchDeadline(); dd != nil {
+		d := dd.AsDuration()
+		if d < minDispatchDeadline || d > maxDispatchDeadline {
+			return status.Error(codes.InvalidArgument, "dispatch_deadline must be between 15s and 30m")
+		}
+	}
+	switch mt := task.GetMessageType().(type) {
+	case *taskspb.Task_HttpRequest:
+		if len(mt.HttpRequest.GetBody()) > maxHTTPTaskBodySize {
+			return status.Error(codes.InvalidArgument, "task body exceeds the 1MB limit for HTTP targets")
+		}
+	case *taskspb.Task_AppEngineHttpRequest:
+		if len(mt.AppEngineHttpRequest.GetBody()) > maxAppEngineTaskBodySize {
+			return status.Error(codes.InvalidArgument, "task body exceeds the 100KB limit for App Engine targets")
+		}
+	}
+	return nil
 }
 
 func (s *Server) DeleteTask(_ context.Context, req *taskspb.DeleteTaskRequest) (*emptypb.Empty, error) {
@@ -366,6 +443,45 @@ func (s *Server) RunTask(_ context.Context, req *taskspb.RunTaskRequest) (*tasks
 }
 
 // ---- helpers ----
+
+// Pagination bounds for List RPCs.
+const (
+	defaultPageSize = 100
+	maxPageSize     = 1000
+)
+
+// paginate returns the slice of names for the requested page and the token for
+// the next page (empty when the listing is exhausted). Page tokens encode the
+// next offset.
+func paginate(names []string, pageSize int32, pageToken string) ([]string, string, error) {
+	start := 0
+	if pageToken != "" {
+		raw, err := base64.RawURLEncoding.DecodeString(pageToken)
+		if err != nil {
+			return nil, "", status.Errorf(codes.InvalidArgument, "invalid page_token %q", pageToken)
+		}
+		start, err = strconv.Atoi(string(raw))
+		if err != nil || start < 0 {
+			return nil, "", status.Errorf(codes.InvalidArgument, "invalid page_token %q", pageToken)
+		}
+	}
+	size := int(pageSize)
+	if size <= 0 {
+		size = defaultPageSize
+	}
+	if size > maxPageSize {
+		size = maxPageSize
+	}
+	if start > len(names) {
+		start = len(names)
+	}
+	end := start + size
+	if end >= len(names) {
+		return names[start:], "", nil
+	}
+	next := base64.RawURLEncoding.EncodeToString([]byte(strconv.Itoa(end)))
+	return names[start:end], next, nil
+}
 
 func (s *Server) queueLocked(name string) (*queueState, error) {
 	qs, ok := s.queues[name]

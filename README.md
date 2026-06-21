@@ -20,11 +20,24 @@ policy, just like production.
   `CreateTask` / `GetTask` / `ListTasks` / `DeleteTask` / `RunTask`.
 - Real HTTP task dispatch for both **HTTP targets** (`HttpRequest`) and
   **App Engine targets** (`AppEngineHttpRequest`).
-- Cloud Tasks request headers injected (`X-CloudTasks-QueueName`,
-  `X-CloudTasks-TaskName`, `X-CloudTasks-TaskRetryCount`,
-  `X-CloudTasks-TaskExecutionCount`, `X-CloudTasks-TaskETA`).
+- Full Cloud Tasks request headers, with the correct prefix per target type:
+  - HTTP targets: `X-CloudTasks-QueueName`, `-TaskName`, `-TaskRetryCount`,
+    `-TaskExecutionCount`, `-TaskETA`, and on retries `-TaskPreviousResponse`
+    and `-TaskRetryReason`; `User-Agent: Google-Cloud-Tasks`.
+  - App Engine targets: the same fields with the `X-AppEngine-` prefix, plus
+    `X-AppEngine-FailFast`; `User-Agent: AppEngine-Google; (+http://code.google.com/appengine)`.
+- `Authorization: Bearer` tokens generated from a task's `OidcToken` /
+  `OauthToken` (the OIDC token is an unsigned JWT carrying the configured
+  service-account email and audience).
+- Redirects are **not** followed — a 3xx response is a failed dispatch, exactly
+  like production.
 - Scheduling via `schedule_time`, retries with exponential backoff
   (`RetryConfig`), rate limiting and bounded concurrency (`RateLimits`).
+- Pagination (`page_size` / `page_token`) for `ListQueues` and `ListTasks`.
+- Resource-limit validation on `CreateTask` (1MB HTTP / 100KB App Engine body,
+  `schedule_time` ≤ 30 days ahead, `dispatch_deadline` in 15s–30m).
+- Task-name tombstones after deletion/completion and a task TTL, matching the
+  Cloud Tasks lifecycle (both durations configurable).
 - Queue pause/resume/purge semantics.
 - In-memory IAM policy support (`GetIamPolicy` / `SetIamPolicy` /
   `TestIamPermissions`), like the Cloud Pub/Sub emulator.
@@ -136,6 +149,32 @@ const client = new CloudTasksClient({
   sslCreds: require('@grpc/grpc-js').credentials.createInsecure(),
 });
 ```
+
+## Embedding in Go tests
+
+The emulator is a plain `google.cloud.tasks.v2` gRPC server, so you can run it
+in-process and point the official client at it — no separate binary needed:
+
+```go
+import (
+    "google.golang.org/grpc"
+    cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
+    taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+    "github.com/ken109/cloud-tasks-emulator/emulator"
+)
+
+lis, _ := net.Listen("tcp", "127.0.0.1:0")
+gs := grpc.NewServer()
+taskspb.RegisterCloudTasksServer(gs, emulator.NewServer(emulator.Config{}))
+go gs.Serve(lis)
+defer gs.Stop()
+
+conn, _ := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+client, _ := cloudtasks.NewClient(ctx, option.WithGRPCConn(conn))
+```
+
+`emulator.Config` lets you tune `DefaultAppEngineHost`, `TaskTTL` and
+`TombstoneTTL` (handy for shortening the lifecycle in tests).
 
 ## Behaviour notes
 
