@@ -24,9 +24,10 @@ type taskState struct {
 	pb      *taskspb.Task
 	timer   *time.Timer
 	removed bool
-	// firstScheduleTime is when the task first became eligible to run; used to
-	// enforce RetryConfig.MaxRetryDuration.
-	firstScheduleTime time.Time
+	// firstAttemptTime is when the task was first dispatched; used to enforce
+	// RetryConfig.MaxRetryDuration ("measured from when the task was first
+	// attempted").
+	firstAttemptTime time.Time
 	// ttlTimer deletes the task once it exceeds the queue's task TTL.
 	ttlTimer *time.Timer
 	// lastHTTPCode / lastRetryReason record the previous attempt for the
@@ -167,6 +168,7 @@ func (qs *queueState) attempt(ts *taskState) {
 			ScheduleTime: att.ScheduleTime,
 			DispatchTime: att.DispatchTime,
 		}
+		ts.firstAttemptTime = dispatchTime
 	}
 
 	ts.lastHTTPCode = httpCode
@@ -212,7 +214,7 @@ func (qs *queueState) shouldRetry(task *taskspb.Task, ts *taskState) bool {
 	if attemptsLimited && task.GetDispatchCount() < maxAttempts {
 		return true
 	}
-	if durationLimited && time.Since(ts.firstScheduleTime) < maxDuration {
+	if durationLimited && time.Since(ts.firstAttemptTime) < maxDuration {
 		return true
 	}
 	return false
@@ -249,7 +251,6 @@ func (qs *queueState) backoff(retries int32) time.Duration {
 // addTask registers and schedules a new task. mu held.
 func (qs *queueState) addTask(ts *taskState) {
 	qs.tasks[ts.pb.GetName()] = ts
-	ts.firstScheduleTime = ts.pb.GetScheduleTime().AsTime()
 	ts.ttlTimer = time.AfterFunc(qs.srv.taskTTL, func() { qs.expire(ts) })
 	qs.schedule(ts)
 }

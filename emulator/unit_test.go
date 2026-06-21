@@ -492,21 +492,21 @@ func TestShouldRetryAndBackoff(t *testing.T) {
 		MaxAttempts:      -1,
 		MaxRetryDuration: durationpb.New(time.Millisecond),
 	}
-	ts := &taskState{pb: &taskspb.Task{DispatchCount: 1000}, firstScheduleTime: time.Now().Add(-time.Second)}
+	ts := &taskState{pb: &taskspb.Task{DispatchCount: 1000}, firstAttemptTime: time.Now().Add(-time.Second)}
 	if qs.shouldRetry(ts.pb, ts) {
 		t.Error("should stop after max retry duration")
 	}
 
 	// Within limits -> retry.
 	qs.pb.RetryConfig = &taskspb.RetryConfig{MaxAttempts: 5}
-	ts2 := &taskState{pb: &taskspb.Task{DispatchCount: 1}, firstScheduleTime: time.Now()}
+	ts2 := &taskState{pb: &taskspb.Task{DispatchCount: 1}, firstAttemptTime: time.Now()}
 	if !qs.shouldRetry(ts2.pb, ts2) {
 		t.Error("should retry within limits")
 	}
 
 	// Both limits unlimited (-1 attempts, 0 duration) -> retry forever.
 	qs.pb.RetryConfig = &taskspb.RetryConfig{MaxAttempts: -1}
-	tsInf := &taskState{pb: &taskspb.Task{DispatchCount: 1_000_000}, firstScheduleTime: time.Now().Add(-time.Hour)}
+	tsInf := &taskState{pb: &taskspb.Task{DispatchCount: 1_000_000}, firstAttemptTime: time.Now().Add(-time.Hour)}
 	if !qs.shouldRetry(tsInf.pb, tsInf) {
 		t.Error("unlimited config should always retry")
 	}
@@ -514,14 +514,30 @@ func TestShouldRetryAndBackoff(t *testing.T) {
 	// Both limits set: attempts exhausted but duration not yet reached -> keep
 	// retrying until BOTH are satisfied.
 	qs.pb.RetryConfig = &taskspb.RetryConfig{MaxAttempts: 2, MaxRetryDuration: durationpb.New(time.Hour)}
-	tsBoth := &taskState{pb: &taskspb.Task{DispatchCount: 5}, firstScheduleTime: time.Now()}
+	tsBoth := &taskState{pb: &taskspb.Task{DispatchCount: 5}, firstAttemptTime: time.Now()}
 	if !qs.shouldRetry(tsBoth.pb, tsBoth) {
 		t.Error("should keep retrying until both attempts and duration limits are reached")
 	}
 	// Both satisfied -> stop.
-	tsDone := &taskState{pb: &taskspb.Task{DispatchCount: 5}, firstScheduleTime: time.Now().Add(-2 * time.Hour)}
+	tsDone := &taskState{pb: &taskspb.Task{DispatchCount: 5}, firstAttemptTime: time.Now().Add(-2 * time.Hour)}
 	if qs.shouldRetry(tsDone.pb, tsDone) {
 		t.Error("should stop once both limits are reached")
+	}
+
+	// Exact documented example: min=10s, max=300s, maxDoublings=3 yields the
+	// sequence 10, 20, 40, 80, 160, 240, 300, 300 (doubles 3 times to 80, then
+	// increases linearly by 2^3*10s = 80s, capped at 300s).
+	// https://docs.cloud.google.com/tasks/docs/configuring-queues
+	qs.pb.RetryConfig = &taskspb.RetryConfig{
+		MinBackoff:   durationpb.New(10 * time.Second),
+		MaxBackoff:   durationpb.New(300 * time.Second),
+		MaxDoublings: 3,
+	}
+	wantSeq := []time.Duration{10, 20, 40, 80, 160, 240, 300, 300}
+	for i, want := range wantSeq {
+		if d := qs.backoff(int32(i + 1)); d != want*time.Second {
+			t.Errorf("backoff(%d) = %v, want %v", i+1, d, want*time.Second)
+		}
 	}
 
 	// Backoff: exponential, then linear, then clamped/overflow.
