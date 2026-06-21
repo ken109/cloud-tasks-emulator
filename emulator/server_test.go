@@ -20,7 +20,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/ken109/cloud-tasks-emulator/internal/emulator"
+	"github.com/ken109/cloud-tasks-emulator/emulator"
 )
 
 const (

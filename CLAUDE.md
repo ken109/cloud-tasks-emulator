@@ -12,12 +12,12 @@ HTTP with retries, backoff, rate limiting and scheduling.
 Layout:
 
 - `main.go` — flag/env parsing and gRPC server bootstrap.
-- `internal/emulator/server.go` — the `CloudTasksServer` RPC implementations.
-- `internal/emulator/queue.go` — queue runtime: scheduling, retries, backoff,
+- `emulator/server.go` — the `CloudTasksServer` RPC implementations.
+- `emulator/queue.go` — queue runtime: scheduling, retries, backoff,
   rate limiting, defaults.
-- `internal/emulator/dispatch.go` — HTTP delivery for HTTP / App Engine targets.
-- `internal/emulator/iam.go` — in-memory IAM policy methods.
-- `internal/emulator/naming.go` — resource-name parsing/validation.
+- `emulator/dispatch.go` — HTTP delivery for HTTP / App Engine targets.
+- `emulator/iam.go` — in-memory IAM policy methods.
+- `emulator/naming.go` — resource-name parsing/validation.
 
 ## Commands
 

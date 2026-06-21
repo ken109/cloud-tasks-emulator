@@ -1,8 +1,10 @@
 package emulator
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,7 +119,7 @@ func TestBuildRequestVariants(t *testing.T) {
 	queue := &taskspb.Queue{Name: "projects/p/locations/l/queues/q"}
 
 	// No target -> error.
-	if _, err := s.buildRequest(queue, &taskspb.Task{Name: "projects/p/locations/l/queues/q/tasks/t"}, 1); err == nil {
+	if _, err := s.buildRequest(queue, &taskspb.Task{Name: "projects/p/locations/l/queues/q/tasks/t"}, attemptInfo{number: 1}); err == nil {
 		t.Error("expected error for task with no target")
 	}
 
@@ -126,22 +128,41 @@ func TestBuildRequestVariants(t *testing.T) {
 		Name:        "projects/p/locations/l/queues/q/tasks/t",
 		MessageType: &taskspb.Task_AppEngineHttpRequest{AppEngineHttpRequest: &taskspb.AppEngineHttpRequest{RelativeUri: "/x"}},
 	}
-	if _, err := s.buildRequest(queue, aeTask, 1); err == nil {
+	if _, err := s.buildRequest(queue, aeTask, attemptInfo{number: 1}); err == nil {
 		t.Error("expected error for app engine task without host")
 	}
 
-	// App Engine target with host -> ok, URL composed.
-	aeTask.MessageType = &taskspb.Task_AppEngineHttpRequest{AppEngineHttpRequest: &taskspb.AppEngineHttpRequest{
-		RelativeUri:      "/work",
-		AppEngineRouting: &taskspb.AppEngineRouting{Host: "http://svc"},
-		HttpMethod:       taskspb.HttpMethod_GET,
-	}}
-	req, err := s.buildRequest(queue, aeTask, 2)
+	// App Engine target with host -> URL composed, X-AppEngine-* headers set.
+	aeTask = &taskspb.Task{
+		Name:         "projects/p/locations/l/queues/q/tasks/ae1",
+		ScheduleTime: timestamppb.New(time.Unix(123, 456000)),
+		MessageType: &taskspb.Task_AppEngineHttpRequest{AppEngineHttpRequest: &taskspb.AppEngineHttpRequest{
+			RelativeUri:      "/work",
+			AppEngineRouting: &taskspb.AppEngineRouting{Host: "http://svc"},
+			HttpMethod:       taskspb.HttpMethod_GET,
+		}},
+	}
+	req, err := s.buildRequest(queue, aeTask, attemptInfo{number: 2, prevHTTPCode: 503, prevReason: "RETURNED_503"})
 	if err != nil || req.URL.String() != "http://svc/work" {
 		t.Fatalf("app engine request: %v / %v", req, err)
 	}
+	if req.Header.Get("User-Agent") != appEngineUserAgent {
+		t.Errorf("app engine UA = %q", req.Header.Get("User-Agent"))
+	}
+	if req.Header.Get("X-AppEngine-QueueName") != "q" || req.Header.Get("X-AppEngine-TaskName") != "ae1" {
+		t.Error("missing X-AppEngine system headers")
+	}
+	if req.Header.Get("X-AppEngine-FailFast") != "false" {
+		t.Error("missing X-AppEngine-FailFast")
+	}
+	if req.Header.Get("X-AppEngine-TaskPreviousResponse") != "503" || req.Header.Get("X-AppEngine-TaskRetryReason") != "RETURNED_503" {
+		t.Error("missing previous-response/retry-reason headers")
+	}
+	if eta := req.Header.Get("X-AppEngine-TaskETA"); eta != "123.000456" {
+		t.Errorf("ETA header = %q, want 123.000456", eta)
+	}
 
-	// HTTP target with body sets default content type and system headers.
+	// HTTP target with body sets default content type, UA and system headers.
 	httpTask := &taskspb.Task{
 		Name:         "projects/p/locations/l/queues/q/tasks/42",
 		ScheduleTime: timestamppb.New(time.Unix(123, 0)),
@@ -151,18 +172,25 @@ func TestBuildRequestVariants(t *testing.T) {
 			Body:       []byte("x"),
 		}},
 	}
-	req, err = s.buildRequest(queue, httpTask, 3)
+	req, err = s.buildRequest(queue, httpTask, attemptInfo{number: 3})
 	if err != nil {
 		t.Fatalf("http request: %v", err)
 	}
 	if ct := req.Header.Get("Content-Type"); ct != "application/octet-stream" {
 		t.Errorf("default content-type = %q", ct)
 	}
+	if req.Header.Get("User-Agent") != httpUserAgent {
+		t.Errorf("http UA = %q", req.Header.Get("User-Agent"))
+	}
 	if req.Header.Get("X-CloudTasks-QueueName") != "q" || req.Header.Get("X-CloudTasks-TaskName") != "42" {
 		t.Error("missing system headers")
 	}
-	if req.Header.Get("X-CloudTasks-TaskRetryCount") != "2" {
-		t.Errorf("retry count header = %q", req.Header.Get("X-CloudTasks-TaskRetryCount"))
+	if req.Header.Get("X-CloudTasks-TaskRetryCount") != "2" || req.Header.Get("X-CloudTasks-TaskExecutionCount") != "2" {
+		t.Errorf("retry/execution count headers wrong")
+	}
+	// First attempt -> no previous-response headers.
+	if req.Header.Get("X-CloudTasks-TaskPreviousResponse") != "" {
+		t.Error("first attempt should not set previous-response header")
 	}
 
 	// Explicit Content-Type is preserved.
@@ -172,7 +200,7 @@ func TestBuildRequestVariants(t *testing.T) {
 		Body:       []byte("x"),
 		Headers:    map[string]string{"Content-Type": "application/json"},
 	}}
-	req, _ = s.buildRequest(queue, httpTask, 1)
+	req, _ = s.buildRequest(queue, httpTask, attemptInfo{number: 1})
 	if ct := req.Header.Get("Content-Type"); ct != "application/json" {
 		t.Errorf("explicit content-type = %q", ct)
 	}
@@ -182,8 +210,48 @@ func TestBuildRequestVariants(t *testing.T) {
 		Url:        "http://bad\n/x",
 		HttpMethod: taskspb.HttpMethod_POST,
 	}}
-	if _, err := s.buildRequest(queue, httpTask, 1); err == nil {
+	if _, err := s.buildRequest(queue, httpTask, attemptInfo{number: 1}); err == nil {
 		t.Error("expected error for malformed url")
+	}
+}
+
+func TestBuildRequestAuthTokens(t *testing.T) {
+	s := NewServer(Config{})
+	queue := &taskspb.Queue{Name: "projects/p/locations/l/queues/q"}
+	mkTask := func(hr *taskspb.HttpRequest) *taskspb.Task {
+		hr.Url = "http://h/p"
+		hr.HttpMethod = taskspb.HttpMethod_POST
+		return &taskspb.Task{
+			Name:        "projects/p/locations/l/queues/q/tasks/t",
+			MessageType: &taskspb.Task_HttpRequest{HttpRequest: hr},
+		}
+	}
+
+	// OIDC token -> Bearer JWT carrying the email claim.
+	oidc := mkTask(&taskspb.HttpRequest{
+		AuthorizationHeader: &taskspb.HttpRequest_OidcToken{OidcToken: &taskspb.OidcToken{ServiceAccountEmail: "sa@x.iam"}},
+	})
+	req, _ := s.buildRequest(queue, oidc, attemptInfo{number: 1})
+	authz := req.Header.Get("Authorization")
+	if len(authz) < 8 || authz[:7] != "Bearer " {
+		t.Fatalf("oidc authorization = %q", authz)
+	}
+	parts := strings.Split(authz[7:], ".")
+	if len(parts) != 3 {
+		t.Fatalf("oidc token is not a JWT: %q", authz)
+	}
+	claims, _ := base64.RawURLEncoding.DecodeString(parts[1])
+	if !strings.Contains(string(claims), "sa@x.iam") {
+		t.Errorf("oidc claims missing email: %s", claims)
+	}
+
+	// OAuth token -> Bearer placeholder.
+	oauth := mkTask(&taskspb.HttpRequest{
+		AuthorizationHeader: &taskspb.HttpRequest_OauthToken{OauthToken: &taskspb.OAuthToken{ServiceAccountEmail: "sa@x.iam", Scope: "scope"}},
+	})
+	req, _ = s.buildRequest(queue, oauth, attemptInfo{number: 1})
+	if a := req.Header.Get("Authorization"); !strings.HasPrefix(a, "Bearer ") {
+		t.Errorf("oauth authorization = %q", a)
 	}
 }
 
@@ -199,23 +267,23 @@ func TestDispatchOutcomes(t *testing.T) {
 	}
 
 	// buildRequest failure -> INVALID_ARGUMENT.
-	st, err := s.dispatch(queue, &taskspb.Task{Name: "projects/p/locations/l/queues/q/tasks/t"}, 1)
+	st, _, err := s.dispatch(queue, &taskspb.Task{Name: "projects/p/locations/l/queues/q/tasks/t"}, attemptInfo{number: 1})
 	if st.GetCode() != int32(code.Code_INVALID_ARGUMENT) || err == nil {
 		t.Errorf("no-target dispatch = %v / %v", st, err)
 	}
 
-	// Transport error -> UNAVAILABLE.
-	st, err = s.dispatch(queue, mkTask("http://127.0.0.1:1"), 1)
-	if st.GetCode() != int32(code.Code_UNAVAILABLE) || err == nil {
-		t.Errorf("transport error dispatch = %v / %v", st, err)
+	// Transport error -> UNAVAILABLE, httpCode 0.
+	st, hc, err := s.dispatch(queue, mkTask("http://127.0.0.1:1"), attemptInfo{number: 1})
+	if st.GetCode() != int32(code.Code_UNAVAILABLE) || err == nil || hc != 0 {
+		t.Errorf("transport error dispatch = %v / %d / %v", st, hc, err)
 	}
 
-	// 2xx -> OK.
+	// 2xx -> OK with the HTTP code returned.
 	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
 	defer okSrv.Close()
-	st, _ = s.dispatch(queue, mkTask(okSrv.URL), 1)
-	if st.GetCode() != int32(code.Code_OK) {
-		t.Errorf("ok dispatch code = %v", st.GetCode())
+	st, hc, _ = s.dispatch(queue, mkTask(okSrv.URL), attemptInfo{number: 1})
+	if st.GetCode() != int32(code.Code_OK) || hc != 200 {
+		t.Errorf("ok dispatch = %v / %d", st.GetCode(), hc)
 	}
 
 	// Non-2xx -> mapped error code, with custom dispatch deadline exercised.
@@ -223,9 +291,31 @@ func TestDispatchOutcomes(t *testing.T) {
 	defer failSrv.Close()
 	ft := mkTask(failSrv.URL)
 	ft.DispatchDeadline = durationpb.New(30 * time.Second)
-	st, _ = s.dispatch(queue, ft, 1)
-	if st.GetCode() != int32(code.Code_INTERNAL) {
-		t.Errorf("fail dispatch code = %v", st.GetCode())
+	st, hc, _ = s.dispatch(queue, ft, attemptInfo{number: 1})
+	if st.GetCode() != int32(code.Code_INTERNAL) || hc != 500 {
+		t.Errorf("fail dispatch = %v / %d", st.GetCode(), hc)
+	}
+
+	// Redirects are NOT followed: a 302 is a failed dispatch, not success.
+	redirSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://example.invalid/elsewhere", http.StatusFound)
+	}))
+	defer redirSrv.Close()
+	st, hc, _ = s.dispatch(queue, mkTask(redirSrv.URL), attemptInfo{number: 1})
+	if st.GetCode() == int32(code.Code_OK) || hc != http.StatusFound {
+		t.Errorf("redirect should not be followed: code=%v http=%d", st.GetCode(), hc)
+	}
+}
+
+func TestRetryReason(t *testing.T) {
+	if got := retryReason(503, "x"); got != "RETURNED_503" {
+		t.Errorf("retryReason(503) = %q", got)
+	}
+	if got := retryReason(0, "boom"); got != "CONNECTION_ERROR: boom" {
+		t.Errorf("retryReason(0, boom) = %q", got)
+	}
+	if got := retryReason(0, ""); got != "CONNECTION_ERROR" {
+		t.Errorf("retryReason(0, empty) = %q", got)
 	}
 }
 

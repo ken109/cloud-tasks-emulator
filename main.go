@@ -16,7 +16,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
-	"github.com/ken109/cloud-tasks-emulator/internal/emulator"
+	"github.com/ken109/cloud-tasks-emulator/emulator"
 )
 
 // logFatalf is a seam so tests can exercise the fatal path without exiting.

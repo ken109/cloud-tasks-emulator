@@ -2,6 +2,7 @@ package emulator
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math"
 	"sync"
@@ -26,6 +27,12 @@ type taskState struct {
 	// firstScheduleTime is when the task first became eligible to run; used to
 	// enforce RetryConfig.MaxRetryDuration.
 	firstScheduleTime time.Time
+	// ttlTimer deletes the task once it exceeds the queue's task TTL.
+	ttlTimer *time.Timer
+	// lastHTTPCode / lastRetryReason record the previous attempt for the
+	// X-CloudTasks-TaskPreviousResponse / -TaskRetryReason headers.
+	lastHTTPCode    int
+	lastRetryReason string
 }
 
 // queueState is the runtime representation of a queue: its proto plus the
@@ -36,6 +43,7 @@ type queueState struct {
 	srv *Server
 
 	tasks       map[string]*taskState // keyed by full task name
+	tombstones  map[string]time.Time  // task name -> reservation expiry
 	limiter     *rate.Limiter
 	concurrency chan struct{}
 
@@ -44,9 +52,10 @@ type queueState struct {
 
 func newQueueState(srv *Server, q *taskspb.Queue) *queueState {
 	qs := &queueState{
-		pb:    q,
-		srv:   srv,
-		tasks: map[string]*taskState{},
+		pb:         q,
+		srv:        srv,
+		tasks:      map[string]*taskState{},
+		tombstones: map[string]time.Time{},
 	}
 	qs.rebuildLimits()
 	return qs
@@ -118,13 +127,17 @@ func (qs *queueState) attempt(ts *taskState) {
 	}
 	task := ts.pb
 	scheduled := task.GetScheduleTime().AsTime()
-	attemptNum := task.GetDispatchCount() + 1
+	info := attemptInfo{
+		number:       task.GetDispatchCount() + 1,
+		prevHTTPCode: ts.lastHTTPCode,
+		prevReason:   ts.lastRetryReason,
+	}
 	taskCopy := proto.Clone(task).(*taskspb.Task)
 	queueCopy := proto.Clone(qs.pb).(*taskspb.Queue)
 	qs.mu.Unlock()
 
 	dispatchTime := time.Now()
-	statusProto, _ := qs.srv.dispatch(queueCopy, taskCopy, attemptNum)
+	statusProto, httpCode, _ := qs.srv.dispatch(queueCopy, taskCopy, info)
 	responseTime := time.Now()
 
 	att := &taskspb.Attempt{
@@ -150,10 +163,15 @@ func (qs *queueState) attempt(ts *taskState) {
 		}
 	}
 
+	ts.lastHTTPCode = httpCode
+
 	if statusProto.GetCode() == 0 { // OK -> task completed, drop it.
 		qs.removeLocked(ts)
 		return
 	}
+
+	// Record why this attempt failed, for the next attempt's retry headers.
+	ts.lastRetryReason = retryReason(httpCode, statusProto.GetMessage())
 
 	// Failure: decide whether to retry.
 	if !qs.shouldRetry(task, ts) {
@@ -215,16 +233,55 @@ func (qs *queueState) backoff(retries int32) time.Duration {
 func (qs *queueState) addTask(ts *taskState) {
 	qs.tasks[ts.pb.GetName()] = ts
 	ts.firstScheduleTime = ts.pb.GetScheduleTime().AsTime()
+	ts.ttlTimer = time.AfterFunc(qs.srv.taskTTL, func() { qs.expire(ts) })
 	qs.schedule(ts)
 }
 
-// removeLocked stops and deletes a task. mu held.
+// expire deletes a task that has exceeded its TTL.
+func (qs *queueState) expire(ts *taskState) {
+	qs.mu.Lock()
+	defer qs.mu.Unlock()
+	if ts.removed {
+		return
+	}
+	qs.removeLocked(ts)
+}
+
+// removeLocked stops and deletes a task, reserving its name with a tombstone.
+// mu held.
 func (qs *queueState) removeLocked(ts *taskState) {
 	ts.removed = true
 	if ts.timer != nil {
 		ts.timer.Stop()
 	}
+	if ts.ttlTimer != nil {
+		ts.ttlTimer.Stop()
+	}
 	delete(qs.tasks, ts.pb.GetName())
+	qs.tombstoneLocked(ts.pb.GetName())
+}
+
+// tombstoneLocked reserves a task name so it cannot be reused until the
+// tombstone TTL elapses. A negative TTL disables tombstones. mu held.
+func (qs *queueState) tombstoneLocked(name string) {
+	ttl := qs.srv.tombstoneTTL
+	if ttl < 0 {
+		return
+	}
+	qs.tombstones[name] = time.Now().Add(ttl)
+	time.AfterFunc(ttl, func() {
+		qs.mu.Lock()
+		defer qs.mu.Unlock()
+		if exp, ok := qs.tombstones[name]; ok && !time.Now().Before(exp) {
+			delete(qs.tombstones, name)
+		}
+	})
+}
+
+// tombstoned reports whether a task name is currently reserved. mu held.
+func (qs *queueState) tombstoned(name string) bool {
+	exp, ok := qs.tombstones[name]
+	return ok && time.Now().Before(exp)
 }
 
 // purge removes every task currently in the queue.
@@ -235,6 +292,9 @@ func (qs *queueState) purge() {
 		ts.removed = true
 		if ts.timer != nil {
 			ts.timer.Stop()
+		}
+		if ts.ttlTimer != nil {
+			ts.ttlTimer.Stop()
 		}
 	}
 	qs.tasks = map[string]*taskState{}
@@ -250,8 +310,22 @@ func (qs *queueState) stop() {
 		if ts.timer != nil {
 			ts.timer.Stop()
 		}
+		if ts.ttlTimer != nil {
+			ts.ttlTimer.Stop()
+		}
 	}
 	qs.tasks = map[string]*taskState{}
+}
+
+// retryReason summarises why an attempt failed, for the retry headers.
+func retryReason(httpCode int, message string) string {
+	if httpCode != 0 {
+		return fmt.Sprintf("RETURNED_%d", httpCode)
+	}
+	if message != "" {
+		return "CONNECTION_ERROR: " + message
+	}
+	return "CONNECTION_ERROR"
 }
 
 // applyDefaults fills unset RateLimits / RetryConfig fields with the documented
@@ -267,9 +341,9 @@ func applyDefaults(q *taskspb.Queue) {
 	if rl.MaxConcurrentDispatches == 0 {
 		rl.MaxConcurrentDispatches = 1000
 	}
-	if rl.MaxBurstSize == 0 {
-		rl.MaxBurstSize = computeBurstSize(rl.MaxDispatchesPerSecond)
-	}
+	// max_burst_size is output-only: Cloud Tasks derives it from the dispatch
+	// rate and ignores any client-provided value.
+	rl.MaxBurstSize = computeBurstSize(rl.MaxDispatchesPerSecond)
 
 	if q.RetryConfig == nil {
 		q.RetryConfig = &taskspb.RetryConfig{}
