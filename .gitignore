@@ -1,0 +1,4 @@
+/cloud-tasks-emulator
+/dist/
+*.out
+*.test
