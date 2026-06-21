@@ -13,6 +13,7 @@ import (
 	"time"
 
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -32,8 +33,9 @@ type Config struct {
 type Server struct {
 	taskspb.UnimplementedCloudTasksServer
 
-	mu     sync.Mutex
-	queues map[string]*queueState // keyed by full queue name
+	mu       sync.Mutex
+	queues   map[string]*queueState   // keyed by full queue name
+	policies map[string]*iampb.Policy // IAM policy keyed by queue name
 
 	httpClient           *http.Client
 	defaultAppEngineHost string
@@ -43,6 +45,7 @@ type Server struct {
 func NewServer(cfg Config) *Server {
 	return &Server{
 		queues:               map[string]*queueState{},
+		policies:             map[string]*iampb.Policy{},
 		httpClient:           &http.Client{},
 		defaultAppEngineHost: cfg.DefaultAppEngineHost,
 	}
@@ -59,9 +62,8 @@ func (s *Server) ListQueues(_ context.Context, req *taskspb.ListQueuesRequest) (
 	defer s.mu.Unlock()
 
 	var names []string
-	for name, qs := range s.queues {
+	for name := range s.queues {
 		if queueParent(name) == req.GetParent() {
-			_ = qs
 			names = append(names, name)
 		}
 	}
@@ -168,6 +170,7 @@ func (s *Server) DeleteQueue(_ context.Context, req *taskspb.DeleteQueueRequest)
 	}
 	qs.stop()
 	delete(s.queues, req.GetName())
+	delete(s.policies, req.GetName())
 	return &emptypb.Empty{}, nil
 }
 
@@ -292,9 +295,6 @@ func (s *Server) CreateTask(_ context.Context, req *taskspb.CreateTaskRequest) (
 	if task.GetScheduleTime() == nil {
 		task.ScheduleTime = timestamppb.New(now)
 	}
-	if task.GetDispatchDeadline() == nil {
-		// Default dispatch deadline is 10 minutes for HTTP targets.
-	}
 	task.DispatchCount = 0
 	task.ResponseCount = 0
 	task.View = taskspb.Task_BASIC
@@ -358,12 +358,10 @@ func (s *Server) RunTask(_ context.Context, req *taskspb.RunTaskRequest) (*tasks
 
 	qs.attempt(ts)
 
+	// ts.pb holds the latest state whether or not the task was dropped during
+	// the forced run.
 	qs.mu.Lock()
 	defer qs.mu.Unlock()
-	if ts.removed {
-		// Task completed/dropped during the forced run; return its last state.
-		return viewTask(ts.pb, req.GetResponseView()), nil
-	}
 	return viewTask(ts.pb, req.GetResponseView()), nil
 }
 
