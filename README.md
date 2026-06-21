@@ -60,13 +60,23 @@ Images are published automatically on every push to `main` (tagged `latest`)
 and on `v*` release tags (tagged with the semver version) by the
 [Publish Docker image](.github/workflows/docker-publish.yml) workflow.
 
-### Flags
+### Configuration
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-host` | `localhost` | Address to bind the gRPC server to |
-| `-port` | `8123` | Port to listen on |
-| `-app-engine-host` | _(empty)_ | Base URL used to dispatch `AppEngineHttpRequest` tasks when no host is set on the task or queue, e.g. `http://localhost:8080` |
+Each flag falls back to an environment variable when not set on the command
+line (flags win), which is convenient for containers and Compose files.
+
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `-host` | `CLOUD_TASKS_EMULATOR_HOST` | `localhost` | Address to bind the gRPC server to |
+| `-port` | `CLOUD_TASKS_EMULATOR_PORT` | `8123` | Port to listen on |
+| `-app-engine-host` | `CLOUD_TASKS_APP_ENGINE_HOST` | _(empty)_ | Base URL used to dispatch `AppEngineHttpRequest` tasks when no host is set on the task or queue, e.g. `http://localhost:8080` |
+
+```bash
+docker run --rm -p 8123:8123 \
+  -e CLOUD_TASKS_EMULATOR_HOST=0.0.0.0 \
+  -e CLOUD_TASKS_APP_ENGINE_HOST=http://host.docker.internal:8080 \
+  ghcr.io/ken109/cloud-tasks-emulator:latest
+```
 
 ## Connecting a client
 
