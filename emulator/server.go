@@ -160,8 +160,12 @@ func (s *Server) UpdateQueue(_ context.Context, req *taskspb.UpdateQueueRequest)
 	if q == nil || q.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "queue.name is required")
 	}
-	if _, _, _, ok := parseQueueName(q.GetName()); !ok {
+	_, _, queueID, ok := parseQueueName(q.GetName())
+	if !ok {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid queue name %q", q.GetName())
+	}
+	if !queueIDRe.MatchString(queueID) {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid queue id %q: must match %s", queueID, queueIDRe)
 	}
 
 	s.mu.Lock()

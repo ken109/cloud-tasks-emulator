@@ -85,6 +85,10 @@ func TestUpdateQueueErrorsAndPaths(t *testing.T) {
 	_, err = c.UpdateQueue(ctx, &taskspb.UpdateQueueRequest{Queue: &taskspb.Queue{Name: "bad"}})
 	wantCode(t, err, codes.InvalidArgument, "UpdateQueue invalid name")
 
+	// Invalid queue id (underscore) is rejected even on the create-on-missing path.
+	_, err = c.UpdateQueue(ctx, &taskspb.UpdateQueueRequest{Queue: &taskspb.Queue{Name: locationPath() + "/queues/bad_id"}})
+	wantCode(t, err, codes.InvalidArgument, "UpdateQueue invalid queue id")
+
 	// Create-if-missing.
 	name := locationPath() + "/queues/upd2"
 	created, err := c.UpdateQueue(ctx, &taskspb.UpdateQueueRequest{Queue: &taskspb.Queue{Name: name}})
