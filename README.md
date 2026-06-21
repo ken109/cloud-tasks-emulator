@@ -26,6 +26,9 @@ policy, just like production.
 - Scheduling via `schedule_time`, retries with exponential backoff
   (`RetryConfig`), rate limiting and bounded concurrency (`RateLimits`).
 - Queue pause/resume/purge semantics.
+- In-memory IAM policy support (`GetIamPolicy` / `SetIamPolicy` /
+  `TestIamPermissions`), like the Cloud Pub/Sub emulator.
+- Configuration via flags or environment variables.
 - Cloud Tasks default values applied to queues (500 dispatches/s, 100 max
   attempts, 0.1s–3600s backoff, ...).
 
@@ -144,16 +147,26 @@ const client = new CloudTasksClient({
 - App Engine targets need a reachable host: set one via the task's
   `app_engine_routing.host`, the queue's `app_engine_routing_override.host`, or
   the `-app-engine-host` flag.
-- IAM methods (`GetIamPolicy` / `SetIamPolicy` / `TestIamPermissions`) are not
-  implemented and return `Unimplemented`.
+- IAM methods (`GetIamPolicy` / `SetIamPolicy` / `TestIamPermissions`) are
+  supported: policies are stored in memory per queue and round-trip like the
+  Cloud Pub/Sub emulator, but are never enforced.
 
 ## Development
 
 ```bash
 make build   # build the binary
 make test    # run the test suite (spins up the emulator in-process)
+make cover   # run tests with the race detector and print total coverage
 make vet     # go vet
+make hooks   # install the lefthook git hooks
 ```
+
+The test suite is kept at **100% statement coverage**, enforced in CI.
+
+[lefthook](https://lefthook.dev) runs `gofmt`/`go vet` on commit and the test
+suite on push. Install the hooks once with `make hooks` (requires the
+`lefthook` binary, e.g. `brew install lefthook` or
+`go install github.com/evilmartians/lefthook@latest`).
 
 ## License
 
