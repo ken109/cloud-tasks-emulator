@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
@@ -67,9 +66,9 @@ func run(opts options, stop <-chan struct{}, ready func(addr string)) error {
 		return err
 	}
 
-	srv := emulator.NewServer(emulator.Config{DefaultAppEngineHost: opts.appEngineHost})
+	emu := emulator.New(emulator.Config{DefaultAppEngineHost: opts.appEngineHost})
 	grpcServer := grpc.NewServer()
-	taskspb.RegisterCloudTasksServer(grpcServer, srv)
+	emu.Register(grpcServer)
 	reflection.Register(grpcServer)
 
 	go func() {
