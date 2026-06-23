@@ -124,42 +124,69 @@ func (qs *queueState) fire(ts *taskState) {
 	qs.attempt(ts)
 }
 
-// attempt dispatches one delivery attempt and applies the retry policy.
+// attempt dispatches one delivery attempt and applies the retry policy. The
+// HTTP dispatch must run without the queue lock held; the snapshot and apply
+// phases each take the lock internally, so attempt() never holds it across the
+// dispatch call.
 func (qs *queueState) attempt(ts *taskState) {
-	qs.mu.Lock()
-	if ts.removed {
-		qs.mu.Unlock()
+	snap, ok := qs.snapshotAttempt(ts)
+	if !ok {
 		return
 	}
-	t := ts.t
-	scheduled := t.ScheduleTime
-	info := attemptInfo{
-		number:         t.DispatchCount + 1,
-		executionCount: t.ResponseCount,
-		prevHTTPCode:   ts.lastHTTPCode,
-		prevReason:     ts.lastRetryReason,
-	}
-	taskCopy := cloneTask(t)
-	queueCopy := *qs.q
-	qs.mu.Unlock()
 
 	dispatchTime := time.Now()
-	rpcCode, httpCode, message := qs.eng.dispatch(&queueCopy, taskCopy, info)
-	responseTime := time.Now()
-
+	rpcCode, httpCode, message := qs.eng.dispatch(&snap.queue, snap.task, snap.info)
 	att := &Attempt{
-		ScheduleTime: scheduled,
+		ScheduleTime: snap.scheduled,
 		DispatchTime: dispatchTime,
-		ResponseTime: responseTime,
+		ResponseTime: time.Now(),
 		Code:         rpcCode,
 		Message:      message,
 	}
 
+	qs.applyAttempt(ts, att, dispatchTime, rpcCode, httpCode, message)
+}
+
+// attemptSnapshot is the immutable view of a task+queue captured under the lock
+// and handed to the (lock-free) dispatch.
+type attemptSnapshot struct {
+	task      *Task
+	queue     Queue
+	info      attemptInfo
+	scheduled time.Time
+}
+
+// snapshotAttempt copies the data dispatch needs under the lock. ok is false if
+// the task was removed before the attempt could start.
+func (qs *queueState) snapshotAttempt(ts *taskState) (attemptSnapshot, bool) {
+	qs.mu.Lock()
+	defer qs.mu.Unlock()
+	if ts.removed {
+		return attemptSnapshot{}, false
+	}
+	t := ts.t
+	return attemptSnapshot{
+		task:      cloneTask(t),
+		queue:     *qs.q,
+		scheduled: t.ScheduleTime,
+		info: attemptInfo{
+			number:         t.DispatchCount + 1,
+			executionCount: t.ResponseCount,
+			prevHTTPCode:   ts.lastHTTPCode,
+			prevReason:     ts.lastRetryReason,
+		},
+	}, true
+}
+
+// applyAttempt records the attempt result under the lock and either completes,
+// drops, or reschedules the task per the retry policy.
+func (qs *queueState) applyAttempt(ts *taskState, att *Attempt, dispatchTime time.Time, rpcCode int32, httpCode int, message string) {
 	qs.mu.Lock()
 	defer qs.mu.Unlock()
 	if ts.removed {
 		return
 	}
+	t := ts.t
 
 	// Every attempt is dispatched; response_count only counts attempts that
 	// received a response (transport error -> httpCode 0), keeping execution

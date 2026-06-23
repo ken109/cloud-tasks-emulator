@@ -3,6 +3,9 @@ package core
 import (
 	"fmt"
 	"regexp"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Resource names share the same format across the Cloud Tasks v2 and v2beta3
@@ -64,4 +67,24 @@ func queueID(queueName string) string {
 func taskID(taskName string) string {
 	_, _, _, id, _ := parseTaskName(taskName)
 	return id
+}
+
+// resolveTaskName validates a caller-provided task name against the parent
+// queue, or generates a fresh one when none was supplied. generateID produces
+// the short task id used for auto-named tasks.
+func resolveTaskName(parent, provided string, generateID func() string) (string, error) {
+	if provided == "" {
+		return parent + "/tasks/" + generateID(), nil
+	}
+	_, _, _, id, ok := parseTaskName(provided)
+	if !ok {
+		return "", status.Errorf(codes.InvalidArgument, "invalid task name %q", provided)
+	}
+	if !idRe.MatchString(id) {
+		return "", status.Errorf(codes.InvalidArgument, "invalid task id %q", id)
+	}
+	if taskQueueOf(provided) != parent {
+		return "", status.Error(codes.InvalidArgument, "task name does not match parent queue")
+	}
+	return provided, nil
 }
