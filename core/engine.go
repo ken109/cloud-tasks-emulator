@@ -242,20 +242,11 @@ func (e *Engine) CreateTask(parent string, t *Task) (*Task, error) {
 		return nil, err
 	}
 
-	if t.Name == "" {
-		t.Name = parent + "/tasks/" + qs.nextTaskID()
-	} else {
-		_, _, _, id, ok := parseTaskName(t.Name)
-		if !ok {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid task name %q", t.Name)
-		}
-		if !idRe.MatchString(id) {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid task id %q", id)
-		}
-		if taskQueueOf(t.Name) != parent {
-			return nil, status.Error(codes.InvalidArgument, "task name does not match parent queue")
-		}
+	name, err := resolveTaskName(parent, t.Name, qs.nextTaskID)
+	if err != nil {
+		return nil, err
 	}
+	t.Name = name
 
 	now := time.Now()
 	t.CreateTime = now

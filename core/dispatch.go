@@ -71,29 +71,7 @@ func (e *Engine) buildRequest(q *Queue, t *Task, info attemptInfo) (*http.Reques
 
 func (e *Engine) buildHTTPRequest(q *Queue, t *Task, info attemptInfo) (*http.Request, error) {
 	tg := t.Target
-	method := tg.Method
-	rawURL := tg.URL
-	headers := cloneHeaders(tg.Headers)
-	auth := tg.Auth
-
-	// Apply the queue-level HTTP target override (v2beta3), if any.
-	if ov := q.HTTPOverride; ov != nil {
-		rawURL = applyURIOverride(rawURL, ov)
-		if ov.Method != "" && ov.AlwaysEnforce {
-			method = ov.Method
-		}
-		for k, v := range ov.Headers {
-			if headers == nil {
-				headers = map[string]string{}
-			}
-			if ov.AlwaysEnforce || headers[k] == "" {
-				headers[k] = v
-			}
-		}
-		if ov.Auth != nil && (auth == nil || ov.AlwaysEnforce) {
-			auth = ov.Auth
-		}
-	}
+	method, rawURL, headers, auth := applyHTTPOverride(tg.Method, tg.URL, cloneHeaders(tg.Headers), tg.Auth, q.HTTPOverride)
 
 	req, err := newRequest(methodOrPost(method), rawURL, tg.Body, headers)
 	if err != nil {
@@ -130,6 +108,31 @@ func (e *Engine) appEngineHost(q *Queue, t *Task) string {
 		return o.Host
 	}
 	return e.defaultAppEngineHost
+}
+
+// applyHTTPOverride resolves the queue-level HTTP target override (v2beta3)
+// against a task's method/URL/headers/auth, returning the effective values. A
+// nil override returns the inputs unchanged.
+func applyHTTPOverride(method, rawURL string, headers map[string]string, auth *Auth, ov *HTTPOverride) (string, string, map[string]string, *Auth) {
+	if ov == nil {
+		return method, rawURL, headers, auth
+	}
+	rawURL = applyURIOverride(rawURL, ov)
+	if ov.Method != "" && ov.AlwaysEnforce {
+		method = ov.Method
+	}
+	for k, v := range ov.Headers {
+		if headers == nil {
+			headers = map[string]string{}
+		}
+		if ov.AlwaysEnforce || headers[k] == "" {
+			headers[k] = v
+		}
+	}
+	if ov.Auth != nil && (auth == nil || ov.AlwaysEnforce) {
+		auth = ov.Auth
+	}
+	return method, rawURL, headers, auth
 }
 
 // applyURIOverride applies a v2beta3 UriOverride to a task URL.
