@@ -118,7 +118,7 @@ func (s *Signer) Handler() http.Handler {
 	serve := func(body []byte) http.HandlerFunc {
 		return func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(body)
+			_, _ = w.Write(body)
 		}
 	}
 	mux.HandleFunc(discoveryPath, serve(s.discovery))
@@ -147,8 +147,8 @@ func buildJWKS(key *rsa.PrivateKey, kid string) []byte {
 			"alg": "RS256",
 			"use": "sig",
 			"kid": kid,
-			"n":   b64url(key.PublicKey.N.Bytes()),
-			"e":   b64url(big.NewInt(int64(key.PublicKey.E)).Bytes()),
+			"n":   b64url(key.N.Bytes()),
+			"e":   b64url(big.NewInt(int64(key.E)).Bytes()),
 		})
 	}
 	out, _ := json.Marshal(map[string]any{"keys": keys})

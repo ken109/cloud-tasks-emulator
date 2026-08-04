@@ -159,7 +159,9 @@ func startOpenIDServer(issuer string, handler http.Handler, ready func(addr stri
 		return nil, err
 	}
 	srv := &http.Server{Handler: handler}
-	go srv.Serve(lis)
+	// Serve only returns once we close the server at shutdown, and the listener
+	// is ours, so there is no error worth surfacing here.
+	go func() { _ = srv.Serve(lis) }()
 	if ready != nil {
 		ready(lis.Addr().String())
 	}

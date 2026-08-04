@@ -48,7 +48,7 @@ func (e *Engine) dispatch(q *Queue, t *Task, info attemptInfo) (rpcCode int32, h
 		return int32(code.Code_UNAVAILABLE), 0, err.Error()
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return int32(code.Code_OK), resp.StatusCode, ""
