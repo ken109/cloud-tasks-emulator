@@ -2,7 +2,9 @@ package main
 
 import (
 	"flag"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -140,4 +142,47 @@ func TestREADMEFlagsAppearInMigrationTable(t *testing.T) {
 			t.Errorf("flag -%s is missing from the migration flag-mapping table", f.Name)
 		}
 	})
+}
+
+// markdownLink matches an inline markdown link target, dropping any anchor.
+var markdownLink = regexp.MustCompile(`\[[^\]]*\]\(([^)#\s]+)(?:#[^)]*)?\)`)
+
+// TestMarkdownLinksResolve keeps the docs navigable: a renamed or deleted file
+// should fail the build rather than leave a dead link in the README.
+func TestMarkdownLinksResolve(t *testing.T) {
+	var docs []string
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules") {
+			return fs.SkipDir
+		}
+		if !d.IsDir() && strings.HasSuffix(path, ".md") {
+			docs = append(docs, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("no markdown files found")
+	}
+
+	for _, doc := range docs {
+		raw, err := os.ReadFile(doc)
+		if err != nil {
+			t.Fatalf("read %s: %v", doc, err)
+		}
+		for _, m := range markdownLink.FindAllStringSubmatch(string(raw), -1) {
+			target := m[1]
+			if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") || strings.HasPrefix(target, "mailto:") {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(filepath.Dir(doc), target)); err != nil {
+				t.Errorf("%s links to %s, which does not exist", doc, target)
+			}
+		}
+	}
 }
