@@ -33,3 +33,7 @@ func (e *Emulator) Register(gs *grpc.Server) {
 
 // Engine returns the underlying engine for advanced/in-process use.
 func (e *Emulator) Engine() *core.Engine { return e.engine }
+
+// EnsureQueue creates a queue by full resource name if it does not already
+// exist, for pre-provisioning queues at startup.
+func (e *Emulator) EnsureQueue(name string) error { return e.engine.EnsureQueue(name) }
