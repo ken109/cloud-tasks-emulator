@@ -24,23 +24,33 @@ Layout:
 - `emulator/emulator.go` — public API: `New(Config)` + `Register(*grpc.Server)`.
 - `emulator/v2.go`, `emulator/v2beta3.go` — the two gRPC adapters.
 - `emulator/conv.go` — shared proto↔core helpers.
+- `conformance/{python,node}/` — checks that drive a *running* emulator with
+  the official client libraries. The Go suite shares the emulator's own types,
+  so only these can catch wire-level mismatches (they found the system-header
+  casing bug). CI runs them against both a built binary and the release image.
 
 ## Commands
 
 ```bash
-make build   # build the binary
-make test    # go test ./...
-make cover   # go test -race with coverage summary
-make vet     # go vet ./...
-make run     # build and run on localhost:8123
-make docker  # build the docker image
-make hooks   # install lefthook git hooks
+make build        # build the binary
+make test         # go test ./...
+make cover        # go test -race with coverage summary
+make vet          # go vet ./...
+make lint         # golangci-lint run
+make conformance  # drive a built emulator with the official Python/Node clients
+make run          # build and run on localhost:8123
+make docker       # build the docker image
+make hooks        # install lefthook git hooks
 ```
 
-Always run `make test` and `gofmt -l .` before committing. Keep the suite at
-**100% statement coverage** (`make cover`); CI fails the build below 100%.
-[lefthook](https://lefthook.dev) enforces `gofmt`/`go vet` on commit and the
-tests on push.
+Always run `make test`, `make lint` and `gofmt -l .` before committing. Keep the
+suite at **100% statement coverage** (`make cover`); CI fails the build below
+100%. [lefthook](https://lefthook.dev) enforces `gofmt`/`go vet` on commit and
+the tests plus lint on push.
+
+Changing anything on the wire — request headers, token shape, the gRPC surface
+— means updating the conformance checks too, since that is the only place the
+official clients get a vote.
 
 ## Commit conventions
 
