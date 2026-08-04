@@ -65,6 +65,23 @@ func NewEngine(cfg Config) *Engine {
 	}
 }
 
+// EnsureQueue creates a queue by full resource name if it does not exist yet,
+// deriving the parent from the name. It is idempotent, which is what startup
+// pre-provisioning wants.
+func (e *Engine) EnsureQueue(name string) error {
+	if _, _, _, ok := parseQueueName(name); !ok {
+		return status.Errorf(codes.InvalidArgument, "invalid queue name %q", name)
+	}
+	e.mu.Lock()
+	_, exists := e.queues[name]
+	e.mu.Unlock()
+	if exists {
+		return nil
+	}
+	_, err := e.CreateQueue(queueParent(name), &Queue{Name: name})
+	return err
+}
+
 // QueueField identifies a mutable queue field for UpdateQueue.
 type QueueField int
 

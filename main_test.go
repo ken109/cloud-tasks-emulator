@@ -171,3 +171,76 @@ func TestRunListenError(t *testing.T) {
 		t.Error("expected listen error for invalid port")
 	}
 }
+
+func TestParseFlagsInitialQueues(t *testing.T) {
+	opts := parseFlags("prog", []string{
+		"-queue", "projects/p/locations/l/queues/a",
+		"-queue", "projects/p/locations/l/queues/b",
+	})
+	if len(opts.queues) != 2 || opts.queues[0] != "projects/p/locations/l/queues/a" {
+		t.Errorf("queues = %v", opts.queues)
+	}
+
+	// The env fallback is aertje-compatible: INITIAL_QUEUES is comma-separated.
+	t.Setenv("INITIAL_QUEUES", "projects/p/locations/l/queues/x, projects/p/locations/l/queues/y ,")
+	opts = parseFlags("prog", nil)
+	if len(opts.queues) != 2 || opts.queues[1] != "projects/p/locations/l/queues/y" {
+		t.Errorf("env queues = %v", opts.queues)
+	}
+	if got := (&stringList{"a", "b"}).String(); got != "a,b" {
+		t.Errorf("stringList.String = %q", got)
+	}
+}
+
+// TestRunPreCreatesQueues checks a queue named on the command line exists
+// before any client has called CreateQueue.
+func TestRunPreCreatesQueues(t *testing.T) {
+	stop := make(chan struct{})
+	addrCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+
+	opts := options{host: "127.0.0.1", port: "0", queues: []string{"projects/p/locations/l/queues/pre"}}
+	go func() {
+		errCh <- run(opts, stop, func(addr string) { addrCh <- addr })
+	}()
+
+	var addr string
+	select {
+	case addr = <-addrCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("server never became ready")
+	}
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	client, err := cloudtasks.NewClient(context.Background(), option.WithGRPCConn(conn))
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	defer client.Close()
+
+	if _, err := client.GetQueue(context.Background(), &taskspb.GetQueueRequest{
+		Name: "projects/p/locations/l/queues/pre",
+	}); err != nil {
+		t.Fatalf("pre-created queue missing: %v", err)
+	}
+
+	close(stop)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Errorf("run returned error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("run did not return after stop")
+	}
+}
+
+func TestRunInvalidInitialQueue(t *testing.T) {
+	err := run(options{host: "127.0.0.1", port: "0", queues: []string{"nonsense"}}, make(chan struct{}), nil)
+	if err == nil {
+		t.Error("expected an error for an invalid initial queue")
+	}
+}
