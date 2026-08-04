@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # The publish workflow runs these same gates before it pushes an image.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.26"
+
+jobs:
+  test:
+    name: vet, lint and 100% coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - run: go vet ./...
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+
+      - name: Test with the 100% coverage gate
+        run: |
+          go test -race -coverprofile=cover.out ./...
+          total=$(go tool cover -func=cover.out | awk '/^total:/ {print $3}')
+          echo "total coverage: $total"
+          if [ "$total" != "100.0%" ]; then
+            echo "::error::coverage $total is below 100%"
+            go tool cover -func=cover.out | awk '$3!="100.0%"'
+            exit 1
+          fi
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  go-install:
+    name: go install from a clean module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # Installing from the checkout catches a module path or main package that
+      # only resolves inside the repo's own build cache.
+      - run: |
+          go install .
+          "$(go env GOPATH)/bin/cloud-tasks-emulator" -host 127.0.0.1 -port 8123 &
+          timeout 30 bash -c 'until (echo > /dev/tcp/127.0.0.1/8123) 2>/dev/null; do sleep 0.5; done'
+          echo "the installed binary listens"
+
+  conformance:
+    name: official ${{ matrix.client }} client
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [python, node]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Start the emulator
+        run: |
+          go build -o /tmp/cloud-tasks-emulator .
+          /tmp/cloud-tasks-emulator -host 127.0.0.1 -port 8123 &
+          timeout 30 bash -c 'until (echo > /dev/tcp/127.0.0.1/8123) 2>/dev/null; do sleep 0.5; done'
+
+      - uses: actions/setup-python@v6
+        if: matrix.client == 'python'
+        with:
+          python-version: "3.13"
+      - name: Drive it with google-cloud-tasks
+        if: matrix.client == 'python'
+        run: |
+          pip install -r conformance/python/requirements.txt
+          EMULATOR_ADDR=127.0.0.1:8123 python conformance/python/check.py
+
+      - uses: actions/setup-node@v6
+        if: matrix.client == 'node'
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: conformance/node/package-lock.json
+      - name: Drive it with @google-cloud/tasks
+        if: matrix.client == 'node'
+        working-directory: conformance/node
+        run: |
+          npm ci
+          EMULATOR_ADDR=127.0.0.1:8123 node check.mjs
+
+  image:
+    name: image smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+
+      # Build exactly what a release would publish, then prove the built image
+      # actually serves before anything downstream trusts it.
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: cloud-tasks-emulator:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Run the image and drive it with the official client
+        run: |
+          # --network host lets the containerised emulator dispatch back to the
+          # target the conformance script starts on the runner.
+          docker run -d --name cte --network host cloud-tasks-emulator:ci \
+            -host 0.0.0.0 -port 8123 -openid-issuer http://127.0.0.1:8980
+          timeout 30 bash -c 'until (echo > /dev/tcp/127.0.0.1/8123) 2>/dev/null; do sleep 0.5; done'
+
+          pip install -r conformance/python/requirements.txt
+          EMULATOR_ADDR=127.0.0.1:8123 python conformance/python/check.py
+
+          # The discovery endpoints must be live in the published image too.
+          for path in /.well-known/openid-configuration /jwks /certs; do
+            curl -fsS "http://127.0.0.1:8980$path" > /dev/null || {
+              echo "::error::$path is not served by the image"; exit 1; }
+          done
+          echo "the image serves the discovery endpoints"
+
+      - name: Emulator logs
+        if: always()
+        run: docker logs cte || true
