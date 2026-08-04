@@ -1,0 +1,41 @@
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  # The conformance clients must track the official libraries they exist to
+  # check, so an upstream client change shows up here as a failing check.
+  - package-ecosystem: npm
+    directory: /conformance/node
+    schedule:
+      interval: weekly
+    groups:
+      conformance-node:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /conformance/python
+    schedule:
+      interval: weekly
+    groups:
+      conformance-python:
+        patterns: ["*"]
