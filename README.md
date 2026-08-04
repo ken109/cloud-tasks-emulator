@@ -209,6 +209,11 @@ const client = new CloudTasksClient({
 
 ## Using in tests
 
+**[docs/testing.md](docs/testing.md)** covers this properly: choosing between
+in-process and Testcontainers, testing retries and backoff without waiting,
+pulling a scheduled task forward with `RunTask`, reaching your handler from a
+container, and isolating tests from each other. The short version:
+
 ### Any language — Testcontainers (recommended)
 
 For integration tests in **any** language, the simplest and most portable option
@@ -356,6 +361,16 @@ compatible: **swapping the image name is usually the whole migration.**
   OAuth tokens are placeholders.
 - App Engine 503 "slow down delivery" pacing is not modelled; the emulator
   dispatches immediately and treats any non-2xx as a retryable failure.
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/oidc.md](docs/oidc.md) | Verifying Cloud Tasks OIDC tokens locally, with verifier code for Go, Python and Node |
+| [docs/testing.md](docs/testing.md) | Testing recipes: in-process, Testcontainers, retries, scheduling, isolation |
+| [pkg.go.dev](https://pkg.go.dev/github.com/ken109/cloud-tasks-emulator/emulator) | Go API reference and runnable examples |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup and the two non-obvious rules |
+| [SECURITY.md](SECURITY.md) | What this tool deliberately does not protect, and how to report a flaw |
 
 ## Development
 
