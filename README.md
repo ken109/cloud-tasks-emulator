@@ -149,6 +149,11 @@ code you run in production passes locally, unchanged. Without `-openid-issuer`
 the tokens are still signed, but carry the production `iss`
 (`https://accounts.google.com`), whose keys the emulator obviously cannot own.
 
+**[docs/oidc.md](docs/oidc.md)** walks the whole path, with verifier code for
+Go (`go-oidc`), Python (`PyJWT`) and Node (`jose`), and a Compose setup. The
+conformance suite verifies a dispatched token with a real JWT library on every
+commit, so that guide is checked rather than assumed.
+
 ## Connecting a client
 
 There is no official `CLOUDTASKS_EMULATOR_HOST` convention, so point the client
@@ -373,14 +378,31 @@ client libraries, which the Go suite cannot do — it shares the emulator's own
 types. Start an emulator, then:
 
 ```bash
+make conformance   # starts an emulator, runs every check, cleans up
+```
+
+Or against an emulator you already have running:
+
+```bash
 pip install -r conformance/python/requirements.txt
 EMULATOR_ADDR=127.0.0.1:8123 python conformance/python/check.py
+EMULATOR_ADDR=127.0.0.1:8123 OPENID_ISSUER=http://127.0.0.1:8980 \
+  python conformance/python/check_oidc.py
 
 cd conformance/node && npm ci
 EMULATOR_ADDR=127.0.0.1:8123 node check.mjs
 ```
 
-CI runs both against a freshly built binary and against the release image.
+`check_oidc.py` verifies a dispatched OIDC token with PyJWT, discovering the
+key through the emulator's published endpoints — the same path a task handler
+takes. CI runs all of them against a freshly built binary and against the
+release image.
+
+The Go examples in [`emulator/example_test.go`](emulator/example_test.go) run as
+part of the suite and appear on
+[pkg.go.dev](https://pkg.go.dev/github.com/ken109/cloud-tasks-emulator/emulator),
+and `docs_test.go` checks the README's configuration and migration tables
+against the real flag set, so neither can drift.
 
 [lefthook](https://lefthook.dev) runs `gofmt`/`go vet` on commit and the test
 suite on push. Install the hooks once with `make hooks` (requires the

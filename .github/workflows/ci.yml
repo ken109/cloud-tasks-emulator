@@ -89,7 +89,9 @@ jobs:
       - name: Start the emulator
         run: |
           go build -o /tmp/cloud-tasks-emulator .
-          /tmp/cloud-tasks-emulator -host 127.0.0.1 -port 8123 &
+          # An issuer is needed for the OIDC verification check.
+          /tmp/cloud-tasks-emulator -host 127.0.0.1 -port 8123 \
+            -openid-issuer http://127.0.0.1:8980 &
           timeout 30 bash -c 'until (echo > /dev/tcp/127.0.0.1/8123) 2>/dev/null; do sleep 0.5; done'
 
       - uses: actions/setup-python@v6
@@ -101,6 +103,11 @@ jobs:
         run: |
           pip install -r conformance/python/requirements.txt
           EMULATOR_ADDR=127.0.0.1:8123 python conformance/python/check.py
+          # Verify a dispatched OIDC token the way a task handler does, with a
+          # general-purpose JWT library discovering the key through the
+          # emulator's published endpoints.
+          EMULATOR_ADDR=127.0.0.1:8123 OPENID_ISSUER=http://127.0.0.1:8980 \
+            python conformance/python/check_oidc.py
 
       - uses: actions/setup-node@v6
         if: matrix.client == 'node'
@@ -146,6 +153,8 @@ jobs:
 
           pip install -r conformance/python/requirements.txt
           EMULATOR_ADDR=127.0.0.1:8123 python conformance/python/check.py
+          EMULATOR_ADDR=127.0.0.1:8123 OPENID_ISSUER=http://127.0.0.1:8980 \
+            python conformance/python/check_oidc.py
 
           # The discovery endpoints must be live in the published image too.
           for path in /.well-known/openid-configuration /jwks /certs; do

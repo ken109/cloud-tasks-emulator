@@ -27,7 +27,14 @@ Layout:
 - `conformance/{python,node}/` — checks that drive a *running* emulator with
   the official client libraries. The Go suite shares the emulator's own types,
   so only these can catch wire-level mismatches (they found the system-header
-  casing bug). CI runs them against both a built binary and the release image.
+  casing bug). `check_oidc.py` additionally verifies a dispatched token with a
+  real JWT library. CI runs them against both a built binary and the image.
+- `docs/` — guides for paths that need more than a README section.
+- `emulator/example_test.go` — the pkg.go.dev examples; they run in CI, so Go
+  snippets cannot rot.
+- `docs_test.go` — checks the README's flag tables against the real flag set.
+  `registerFlags` in `main.go` is the single source of truth; add a flag there
+  and the test tells you which docs to update.
 
 ## Commands
 
