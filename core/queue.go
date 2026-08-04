@@ -327,8 +327,15 @@ func (qs *queueState) purge() {
 		if ts.ttlTimer != nil {
 			ts.ttlTimer.Stop()
 		}
+		// Purged names stay reserved for the tombstone window, as in production.
+		qs.tombstoneLocked(ts.t.Name)
 	}
 	qs.tasks = map[string]*taskState{}
+	// Hard reset drops that history instead, so a test can immediately recreate
+	// the task names it just purged.
+	if qs.eng.hardResetOnPurge {
+		qs.tombstones = map[string]time.Time{}
+	}
 	qs.q.PurgeTime = time.Now()
 }
 

@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -28,6 +29,7 @@ type options struct {
 	host          string
 	port          string
 	appEngineHost string
+	hardReset     bool
 	queues        []string
 }
 
@@ -61,6 +63,7 @@ func parseFlags(prog string, args []string) options {
 	host := fs.String("host", envOr("CLOUD_TASKS_EMULATOR_HOST", "localhost"), "host/address to bind to (env: CLOUD_TASKS_EMULATOR_HOST)")
 	port := fs.String("port", envOr("CLOUD_TASKS_EMULATOR_PORT", "8123"), "port to listen on (env: CLOUD_TASKS_EMULATOR_PORT)")
 	appEngineHost := fs.String("app-engine-host", envOr("CLOUD_TASKS_APP_ENGINE_HOST", ""), "default base URL for App Engine HTTP task targets (env: CLOUD_TASKS_APP_ENGINE_HOST)")
+	hardReset := fs.Bool("hard-reset-on-purge-queue", envBool("CLOUD_TASKS_HARD_RESET_ON_PURGE_QUEUE"), "drop task-name history when a queue is purged, so purged names can be reused immediately (env: CLOUD_TASKS_HARD_RESET_ON_PURGE_QUEUE)")
 
 	var queues stringList
 	fs.Var(&queues, "queue", "full resource name of a queue to create at startup; repeatable (env: INITIAL_QUEUES, comma-separated)")
@@ -70,14 +73,23 @@ func parseFlags(prog string, args []string) options {
 	if len(queues) == 0 {
 		queues = splitList(os.Getenv("INITIAL_QUEUES"))
 	}
-	return options{host: *host, port: *port, appEngineHost: *appEngineHost, queues: queues}
+	return options{
+		host:          *host,
+		port:          *port,
+		appEngineHost: *appEngineHost,
+		hardReset:     *hardReset,
+		queues:        queues,
+	}
 }
 
 // run starts the gRPC server and blocks until stop is closed or Serve fails.
 // When ready is non-nil it is called with the bound address once the server is
 // listening (useful for tests that bind to port 0).
 func run(opts options, stop <-chan struct{}, ready func(addr string)) error {
-	emu := emulator.New(emulator.Config{DefaultAppEngineHost: opts.appEngineHost})
+	emu := emulator.New(emulator.Config{
+		DefaultAppEngineHost: opts.appEngineHost,
+		HardResetOnPurge:     opts.hardReset,
+	})
 
 	for _, name := range opts.queues {
 		if err := emu.EnsureQueue(name); err != nil {
@@ -116,6 +128,12 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envBool reports whether the environment variable holds a true-ish value.
+func envBool(key string) bool {
+	v, _ := strconv.ParseBool(os.Getenv(key))
+	return v
 }
 
 // splitList splits a comma-separated list, dropping empty entries.

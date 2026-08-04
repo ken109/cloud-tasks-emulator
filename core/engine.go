@@ -19,6 +19,9 @@ type Config struct {
 	DefaultAppEngineHost string
 	TaskTTL              time.Duration
 	TombstoneTTL         time.Duration
+	// HardResetOnPurge also clears the task-name tombstones when a queue is
+	// purged, so a test can immediately reuse the names it just purged.
+	HardResetOnPurge bool
 }
 
 // Default lifecycle durations matching Cloud Tasks: tasks live up to 31 days,
@@ -38,6 +41,7 @@ type Engine struct {
 	defaultAppEngineHost string
 	taskTTL              time.Duration
 	tombstoneTTL         time.Duration
+	hardResetOnPurge     bool
 }
 
 // NewEngine constructs an Engine.
@@ -62,6 +66,7 @@ func NewEngine(cfg Config) *Engine {
 		defaultAppEngineHost: cfg.DefaultAppEngineHost,
 		taskTTL:              taskTTL,
 		tombstoneTTL:         tombstoneTTL,
+		hardResetOnPurge:     cfg.HardResetOnPurge,
 	}
 }
 

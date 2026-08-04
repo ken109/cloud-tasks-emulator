@@ -176,16 +176,24 @@ func TestParseFlagsInitialQueues(t *testing.T) {
 	opts := parseFlags("prog", []string{
 		"-queue", "projects/p/locations/l/queues/a",
 		"-queue", "projects/p/locations/l/queues/b",
+		"-hard-reset-on-purge-queue",
 	})
 	if len(opts.queues) != 2 || opts.queues[0] != "projects/p/locations/l/queues/a" {
 		t.Errorf("queues = %v", opts.queues)
 	}
+	if !opts.hardReset {
+		t.Error("hard reset flag not applied")
+	}
 
 	// The env fallback is aertje-compatible: INITIAL_QUEUES is comma-separated.
 	t.Setenv("INITIAL_QUEUES", "projects/p/locations/l/queues/x, projects/p/locations/l/queues/y ,")
+	t.Setenv("CLOUD_TASKS_HARD_RESET_ON_PURGE_QUEUE", "true")
 	opts = parseFlags("prog", nil)
 	if len(opts.queues) != 2 || opts.queues[1] != "projects/p/locations/l/queues/y" {
 		t.Errorf("env queues = %v", opts.queues)
+	}
+	if !opts.hardReset {
+		t.Error("env hard reset not applied")
 	}
 	if got := (&stringList{"a", "b"}).String(); got != "a,b" {
 		t.Errorf("stringList.String = %q", got)
