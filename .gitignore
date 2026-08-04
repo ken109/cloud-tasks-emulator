@@ -3,3 +3,4 @@
 *.out
 *.test
 cover.out
+node_modules/
