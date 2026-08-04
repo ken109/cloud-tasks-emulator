@@ -113,10 +113,17 @@ if (received.headers["content-type"] !== "application/json") {
   fail(`Content-Type = ${received.headers["content-type"]}`);
 }
 
-// A successfully dispatched task is removed from the queue.
-const [remaining] = await client.listTasks({ parent: QUEUE_NAME });
-if (remaining.length > 0) {
-  fail(`queue still holds ${remaining.map((t) => t.name)} after a 2xx dispatch`);
+// A successfully dispatched task is removed from the queue. The emulator only
+// records that once it has read our 2xx, which is necessarily after the handler
+// handed us the request, so poll rather than assert once.
+const deadline = Date.now() + 15_000;
+for (;;) {
+  const [remaining] = await client.listTasks({ parent: QUEUE_NAME });
+  if (remaining.length === 0) break;
+  if (Date.now() > deadline) {
+    fail(`queue still holds ${remaining.map((t) => t.name)} after a 2xx dispatch`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 200));
 }
 
 await client.deleteQueue({ name: QUEUE_NAME });

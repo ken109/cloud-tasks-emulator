@@ -15,6 +15,7 @@ import queue
 import socket
 import sys
 import threading
+import time
 
 import grpc
 from google.cloud import tasks_v2
@@ -98,10 +99,17 @@ def main() -> None:
     if headers.get("Content-Type") != "application/json":
         fail(f"Content-Type = {headers.get('Content-Type')!r}")
 
-    # A successfully dispatched task is removed from the queue.
-    remaining = list(client.list_tasks(parent=QUEUE_NAME))
-    if remaining:
-        fail(f"queue still holds {[t.name for t in remaining]} after a 2xx dispatch")
+    # A successfully dispatched task is removed from the queue. The emulator
+    # only records that once it has read our 2xx, which is necessarily after
+    # the handler handed us the request, so poll rather than assert once.
+    deadline = time.monotonic() + 15
+    while True:
+        remaining = list(client.list_tasks(parent=QUEUE_NAME))
+        if not remaining:
+            break
+        if time.monotonic() > deadline:
+            fail(f"queue still holds {[t.name for t in remaining]} after a 2xx dispatch")
+        time.sleep(0.2)
 
     client.delete_queue(name=QUEUE_NAME)
     print(f"OK: google-cloud-tasks (python) against {EMULATOR_ADDR}")
