@@ -66,30 +66,47 @@ type stringList []string
 func (s *stringList) String() string     { return strings.Join(*s, ",") }
 func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 
+// flagValues holds the destinations the command-line flags parse into.
+type flagValues struct {
+	host          *string
+	port          *string
+	appEngineHost *string
+	openIDIssuer  *string
+	hardReset     *bool
+	queues        stringList
+}
+
+// registerFlags declares the whole command-line surface on fs. It is the single
+// source of truth for the flags, their defaults and the environment variables
+// they fall back to — a test walks it to check the README stays in step.
+func registerFlags(fs *flag.FlagSet) *flagValues {
+	v := &flagValues{}
+	v.host = fs.String("host", envOr("CLOUD_TASKS_EMULATOR_HOST", "localhost"), "host/address to bind to (env: CLOUD_TASKS_EMULATOR_HOST)")
+	v.port = fs.String("port", envOr("CLOUD_TASKS_EMULATOR_PORT", "8123"), "port to listen on (env: CLOUD_TASKS_EMULATOR_PORT)")
+	v.appEngineHost = fs.String("app-engine-host", envOr("CLOUD_TASKS_APP_ENGINE_HOST", ""), "default base URL for App Engine HTTP task targets (env: CLOUD_TASKS_APP_ENGINE_HOST)")
+	v.openIDIssuer = fs.String("openid-issuer", envOr("CLOUD_TASKS_OPENID_ISSUER", ""), "base URL to serve the OpenID discovery endpoints on, e.g. http://localhost:8980; also the iss claim of dispatched OIDC tokens (env: CLOUD_TASKS_OPENID_ISSUER)")
+	v.hardReset = fs.Bool("hard-reset-on-purge-queue", envBool("CLOUD_TASKS_HARD_RESET_ON_PURGE_QUEUE"), "drop task-name history when a queue is purged, so purged names can be reused immediately (env: CLOUD_TASKS_HARD_RESET_ON_PURGE_QUEUE)")
+	fs.Var(&v.queues, "queue", "full resource name of a queue to create at startup; repeatable (env: INITIAL_QUEUES, comma-separated)")
+	return v
+}
+
 // parseFlags builds options from command-line arguments, falling back to
 // environment variables when a flag is not provided.
 func parseFlags(prog string, args []string) options {
 	fs := flag.NewFlagSet(prog, flag.ExitOnError)
-	host := fs.String("host", envOr("CLOUD_TASKS_EMULATOR_HOST", "localhost"), "host/address to bind to (env: CLOUD_TASKS_EMULATOR_HOST)")
-	port := fs.String("port", envOr("CLOUD_TASKS_EMULATOR_PORT", "8123"), "port to listen on (env: CLOUD_TASKS_EMULATOR_PORT)")
-	appEngineHost := fs.String("app-engine-host", envOr("CLOUD_TASKS_APP_ENGINE_HOST", ""), "default base URL for App Engine HTTP task targets (env: CLOUD_TASKS_APP_ENGINE_HOST)")
-	openIDIssuer := fs.String("openid-issuer", envOr("CLOUD_TASKS_OPENID_ISSUER", ""), "base URL to serve the OpenID discovery endpoints on, e.g. http://localhost:8980; also the `iss` claim of dispatched OIDC tokens (env: CLOUD_TASKS_OPENID_ISSUER)")
-	hardReset := fs.Bool("hard-reset-on-purge-queue", envBool("CLOUD_TASKS_HARD_RESET_ON_PURGE_QUEUE"), "drop task-name history when a queue is purged, so purged names can be reused immediately (env: CLOUD_TASKS_HARD_RESET_ON_PURGE_QUEUE)")
-
-	var queues stringList
-	fs.Var(&queues, "queue", "full resource name of a queue to create at startup; repeatable (env: INITIAL_QUEUES, comma-separated)")
-
+	v := registerFlags(fs)
 	_ = fs.Parse(args)
 
+	queues := v.queues
 	if len(queues) == 0 {
-		queues = splitList(os.Getenv("INITIAL_QUEUES"))
+		queues = splitList(envOr("INITIAL_QUEUES", ""))
 	}
 	return options{
-		host:          *host,
-		port:          *port,
-		appEngineHost: *appEngineHost,
-		openIDIssuer:  *openIDIssuer,
-		hardReset:     *hardReset,
+		host:          *v.host,
+		port:          *v.port,
+		appEngineHost: *v.appEngineHost,
+		openIDIssuer:  *v.openIDIssuer,
+		hardReset:     *v.hardReset,
 		queues:        queues,
 	}
 }
@@ -181,9 +198,13 @@ func openIDAddr(issuer string) (string, error) {
 	return "0.0.0.0:" + u.Port(), nil
 }
 
+// lookupEnv is a seam so tests can read the flag defaults with a pristine
+// environment, which is what the README documents.
+var lookupEnv = os.LookupEnv
+
 // envOr returns the value of the environment variable key, or def if unset.
 func envOr(key, def string) string {
-	if v, ok := os.LookupEnv(key); ok {
+	if v, ok := lookupEnv(key); ok {
 		return v
 	}
 	return def
@@ -191,7 +212,7 @@ func envOr(key, def string) string {
 
 // envBool reports whether the environment variable holds a true-ish value.
 func envBool(key string) bool {
-	v, _ := strconv.ParseBool(os.Getenv(key))
+	v, _ := strconv.ParseBool(envOr(key, ""))
 	return v
 }
 

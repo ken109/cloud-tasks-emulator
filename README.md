@@ -185,13 +185,10 @@ client.CreateTask(ctx, &taskspb.CreateTaskRequest{
 ```python
 import grpc
 from google.cloud import tasks_v2
-from google.api_core.client_options import ClientOptions
+from google.cloud.tasks_v2.services.cloud_tasks.transports import CloudTasksGrpcTransport
 
-client = tasks_v2.CloudTasksClient(
-    client_options=ClientOptions(api_endpoint="localhost:8123"),
-    transport="grpc",
-    channel=grpc.insecure_channel("localhost:8123"),
-)
+channel = grpc.insecure_channel("localhost:8123")
+client = tasks_v2.CloudTasksClient(transport=CloudTasksGrpcTransport(channel=channel))
 ```
 
 ### Node.js
@@ -358,11 +355,15 @@ compatible: **swapping the image name is usually the whole migration.**
 ## Development
 
 ```bash
-make build   # build the binary
-make test    # run the test suite (spins up the emulator in-process)
-make cover   # run tests with the race detector and print total coverage
-make vet     # go vet
-make hooks   # install the lefthook git hooks
+make build        # build the binary
+make test         # run the test suite (spins up the emulator in-process)
+make cover        # run tests with the race detector and print total coverage
+make vet          # go vet
+make lint         # golangci-lint
+make conformance  # drive a built emulator with the official Python/Node clients
+make run          # build and run on localhost:8123
+make docker       # build the docker image
+make hooks        # install the lefthook git hooks
 ```
 
 The test suite is kept at **100% statement coverage**, enforced in CI.
