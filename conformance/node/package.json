@@ -1,0 +1,13 @@
+{
+  "name": "cloud-tasks-emulator-conformance",
+  "private": true,
+  "type": "module",
+  "description": "Drives a running emulator with the official @google-cloud/tasks client.",
+  "scripts": {
+    "check": "node check.mjs"
+  },
+  "dependencies": {
+    "@google-cloud/tasks": "^6.0.0",
+    "@grpc/grpc-js": "^1.12.0"
+  }
+}
