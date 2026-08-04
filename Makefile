@@ -1,7 +1,10 @@
 BINARY := cloud-tasks-emulator
 IMAGE  := cloud-tasks-emulator
+# Override to point the conformance checks at a virtualenv or another runtime.
+PYTHON ?= python3
+NODE   ?= node
 
-.PHONY: build test cover vet run docker hooks clean
+.PHONY: build test cover vet lint conformance run docker hooks clean
 
 build:
 	go build -o $(BINARY) .
@@ -15,6 +18,20 @@ cover:
 
 vet:
 	go vet ./...
+
+lint:
+	golangci-lint run
+
+# Drive a locally built emulator with the official client libraries. Install
+# their dependencies first: pip install -r conformance/python/requirements.txt
+# and (cd conformance/node && npm ci).
+conformance: build
+	@./$(BINARY) -host 127.0.0.1 -port 8123 & \
+		emulator=$$!; \
+		trap "kill $$emulator 2>/dev/null" EXIT; \
+		sleep 1; \
+		EMULATOR_ADDR=127.0.0.1:8123 $(PYTHON) conformance/python/check.py && \
+		cd conformance/node && EMULATOR_ADDR=127.0.0.1:8123 $(NODE) check.mjs
 
 run: build
 	./$(BINARY)
