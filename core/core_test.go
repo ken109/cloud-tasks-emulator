@@ -85,7 +85,7 @@ func TestRetryReasonAndTokens(t *testing.T) {
 	if methodOrPost("") != http.MethodPost || methodOrPost("GET") != "GET" {
 		t.Error("methodOrPost")
 	}
-	tok := oidcToken("a@b", "aud")
+	tok := NewSigner("", defaultSigningKey()).Token("a@b", "aud")
 	parts := strings.Split(tok, ".")
 	claims, _ := base64.RawURLEncoding.DecodeString(parts[1])
 	if !strings.Contains(string(claims), "a@b") {
