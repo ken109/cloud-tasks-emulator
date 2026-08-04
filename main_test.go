@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"syscall"
 	"testing"
@@ -107,7 +109,7 @@ func TestRunServesAndShutsDown(t *testing.T) {
 	errCh := make(chan error, 1)
 
 	go func() {
-		errCh <- run(options{host: "127.0.0.1", port: "0"}, stop, func(addr string) { addrCh <- addr })
+		errCh <- run(options{host: "127.0.0.1", port: "0"}, stop, hooks{grpcReady: func(addr string) { addrCh <- addr }})
 	}()
 
 	var addr string
@@ -167,7 +169,7 @@ func TestMainFatalOnListenError(t *testing.T) {
 
 func TestRunListenError(t *testing.T) {
 	// An invalid port forces net.Listen to fail.
-	if err := run(options{host: "127.0.0.1", port: "999999"}, make(chan struct{}), nil); err == nil {
+	if err := run(options{host: "127.0.0.1", port: "999999"}, make(chan struct{}), hooks{}); err == nil {
 		t.Error("expected listen error for invalid port")
 	}
 }
@@ -209,7 +211,7 @@ func TestRunPreCreatesQueues(t *testing.T) {
 
 	opts := options{host: "127.0.0.1", port: "0", queues: []string{"projects/p/locations/l/queues/pre"}}
 	go func() {
-		errCh <- run(opts, stop, func(addr string) { addrCh <- addr })
+		errCh <- run(opts, stop, hooks{grpcReady: func(addr string) { addrCh <- addr }})
 	}()
 
 	var addr string
@@ -247,8 +249,96 @@ func TestRunPreCreatesQueues(t *testing.T) {
 }
 
 func TestRunInvalidInitialQueue(t *testing.T) {
-	err := run(options{host: "127.0.0.1", port: "0", queues: []string{"nonsense"}}, make(chan struct{}), nil)
+	err := run(options{host: "127.0.0.1", port: "0", queues: []string{"nonsense"}}, make(chan struct{}), hooks{})
 	if err == nil {
 		t.Error("expected an error for an invalid initial queue")
+	}
+}
+
+func TestParseFlagsOpenIDIssuer(t *testing.T) {
+	opts := parseFlags("prog", []string{"-openid-issuer", "http://localhost:8980"})
+	if opts.openIDIssuer != "http://localhost:8980" {
+		t.Errorf("openIDIssuer = %q", opts.openIDIssuer)
+	}
+	t.Setenv("CLOUD_TASKS_OPENID_ISSUER", "http://localhost:9980")
+	if got := parseFlags("prog", nil).openIDIssuer; got != "http://localhost:9980" {
+		t.Errorf("env openIDIssuer = %q", got)
+	}
+}
+
+func TestOpenIDAddr(t *testing.T) {
+	if got, err := openIDAddr("http://localhost:8980"); err != nil || got != "0.0.0.0:8980" {
+		t.Errorf("openIDAddr = %q, %v", got, err)
+	}
+	if _, err := openIDAddr("http://localhost"); err == nil {
+		t.Error("expected an error for an issuer without a port")
+	}
+	if _, err := openIDAddr("http://[::1"); err == nil {
+		t.Error("expected an error for an unparseable issuer")
+	}
+}
+
+// TestRunServesOpenIDDiscovery checks the discovery endpoints come up on the
+// issuer's port alongside the gRPC server, and shut down with it.
+func TestRunServesOpenIDDiscovery(t *testing.T) {
+	issuer := "http://127.0.0.1:" + freePort(t)
+
+	stop := make(chan struct{})
+	addrCh := make(chan string, 1)
+	oidcCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+
+	opts := options{host: "127.0.0.1", port: "0", openIDIssuer: issuer}
+	go func() {
+		errCh <- run(opts, stop, hooks{
+			grpcReady:   func(addr string) { addrCh <- addr },
+			openIDReady: func(addr string) { oidcCh <- addr },
+		})
+	}()
+
+	select {
+	case <-addrCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("server never became ready")
+	}
+	<-oidcCh
+
+	for _, path := range []string{"/.well-known/openid-configuration", "/jwks", "/certs"} {
+		resp, err := http.Get(issuer + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || len(body) == 0 {
+			t.Errorf("GET %s = %d %q", path, resp.StatusCode, body)
+		}
+	}
+
+	close(stop)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Errorf("run returned error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("run did not return after stop")
+	}
+}
+
+func TestRunOpenIDErrors(t *testing.T) {
+	// A bad issuer fails after the gRPC listener is open, which must be closed.
+	if err := run(options{host: "127.0.0.1", port: "0", openIDIssuer: "http://no-port"}, make(chan struct{}), hooks{}); err == nil {
+		t.Error("expected an error for an issuer without a port")
+	}
+	// The issuer port already being taken is reported too.
+	busy, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer busy.Close()
+	_, busyPort, _ := net.SplitHostPort(busy.Addr().String())
+	if err := run(options{host: "127.0.0.1", port: "0", openIDIssuer: "http://127.0.0.1:" + busyPort}, make(chan struct{}), hooks{}); err == nil {
+		t.Error("expected an error when the issuer port is in use")
 	}
 }

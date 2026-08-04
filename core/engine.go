@@ -19,6 +19,9 @@ type Config struct {
 	DefaultAppEngineHost string
 	TaskTTL              time.Duration
 	TombstoneTTL         time.Duration
+	// OpenIDIssuer is the `iss` claim stamped on OIDC tokens and the base URL
+	// advertised by the discovery document. Empty uses the production issuer.
+	OpenIDIssuer string
 	// HardResetOnPurge also clears the task-name tombstones when a queue is
 	// purged, so a test can immediately reuse the names it just purged.
 	HardResetOnPurge bool
@@ -41,6 +44,7 @@ type Engine struct {
 	defaultAppEngineHost string
 	taskTTL              time.Duration
 	tombstoneTTL         time.Duration
+	signer               *Signer
 	hardResetOnPurge     bool
 }
 
@@ -66,9 +70,13 @@ func NewEngine(cfg Config) *Engine {
 		defaultAppEngineHost: cfg.DefaultAppEngineHost,
 		taskTTL:              taskTTL,
 		tombstoneTTL:         tombstoneTTL,
+		signer:               NewSigner(cfg.OpenIDIssuer, defaultSigningKey()),
 		hardResetOnPurge:     cfg.HardResetOnPurge,
 	}
 }
+
+// Signer returns the OIDC signer, whose Handler serves the discovery endpoints.
+func (e *Engine) Signer() *Signer { return e.signer }
 
 // EnsureQueue creates a queue by full resource name if it does not exist yet,
 // deriving the parent from the name. It is idempotent, which is what startup

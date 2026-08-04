@@ -3,8 +3,6 @@ package core
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -80,7 +78,7 @@ func (e *Engine) buildHTTPRequest(q *Queue, t *Task, info attemptInfo) (*http.Re
 	req.Header.Set("User-Agent", httpUserAgent)
 	setSystemHeaders(req, "X-CloudTasks", q, t, info)
 	if auth != nil {
-		setAuthHeader(req, auth, rawURL)
+		e.setAuthHeader(req, auth, rawURL)
 	}
 	return req, nil
 }
@@ -200,41 +198,21 @@ func setSystemHeaders(req *http.Request, prefix string, q *Queue, t *Task, info 
 	}
 }
 
-func setAuthHeader(req *http.Request, auth *Auth, targetURL string) {
+func (e *Engine) setAuthHeader(req *http.Request, auth *Auth, targetURL string) {
 	switch auth.Kind {
 	case AuthOIDC:
 		aud := auth.Audience
 		if aud == "" {
 			aud = targetURL
 		}
-		req.Header.Set("Authorization", "Bearer "+oidcToken(auth.ServiceAccountEmail, aud))
+		req.Header.Set("Authorization", "Bearer "+e.signer.Token(auth.ServiceAccountEmail, aud))
 	case AuthOAuth:
 		req.Header.Set("Authorization", "Bearer "+oauthToken(auth.ServiceAccountEmail, auth.Scope))
 	}
 }
 
-// oidcToken builds an unsigned (alg=none) OIDC JWT for the service account.
-func oidcToken(email, audience string) string {
-	header := b64url(`{"alg":"none","typ":"JWT"}`)
-	now := time.Now()
-	claims, _ := json.Marshal(map[string]any{
-		"iss":            "https://accounts.google.com",
-		"aud":            audience,
-		"email":          email,
-		"email_verified": true,
-		"sub":            email,
-		"iat":            now.Unix(),
-		"exp":            now.Add(time.Hour).Unix(),
-	})
-	return header + "." + b64url(string(claims)) + "."
-}
-
 func oauthToken(email, scope string) string {
 	return "emulator-oauth-token/" + email + "/" + scope
-}
-
-func b64url(s string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(s))
 }
 
 func methodOrPost(m string) string {

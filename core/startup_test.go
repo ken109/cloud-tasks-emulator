@@ -64,3 +64,13 @@ func TestPurgeTombstonesAndHardReset(t *testing.T) {
 		t.Errorf("hard reset should free the purged task name: %v", err)
 	}
 }
+
+func TestEngineSignerUsesConfiguredIssuer(t *testing.T) {
+	e := NewEngine(Config{OpenIDIssuer: "http://localhost:8980"})
+	if got := e.Signer().Issuer(); got != "http://localhost:8980" {
+		t.Errorf("Signer().Issuer() = %q", got)
+	}
+	if got := NewEngine(Config{}).Signer().Issuer(); got != defaultOIDCIssuer {
+		t.Errorf("default Signer().Issuer() = %q", got)
+	}
+}

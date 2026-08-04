@@ -5,6 +5,8 @@
 package emulator
 
 import (
+	"net/http"
+
 	taskspbv2 "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	taskspbv2beta3 "cloud.google.com/go/cloudtasks/apiv2beta3/cloudtaskspb"
 	"google.golang.org/grpc"
@@ -33,6 +35,11 @@ func (e *Emulator) Register(gs *grpc.Server) {
 
 // Engine returns the underlying engine for advanced/in-process use.
 func (e *Emulator) Engine() *core.Engine { return e.engine }
+
+// OpenIDHandler serves the OpenID discovery document and the public keys that
+// verify the OIDC tokens attached to dispatched tasks. Serve it at the URL
+// configured as Config.OpenIDIssuer.
+func (e *Emulator) OpenIDHandler() http.Handler { return e.engine.Signer().Handler() }
 
 // EnsureQueue creates a queue by full resource name if it does not already
 // exist, for pre-provisioning queues at startup.
