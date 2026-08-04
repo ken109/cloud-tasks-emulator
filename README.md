@@ -29,8 +29,10 @@ retry/backoff and rate-limit policy, just like production.
   - App Engine targets: the same fields with the `X-AppEngine-` prefix, plus
     `X-AppEngine-FailFast`; `User-Agent: AppEngine-Google; (+http://code.google.com/appengine)`.
 - `Authorization: Bearer` tokens generated from a task's `OidcToken` /
-  `OauthToken` (the OIDC token is an unsigned JWT carrying the configured
-  service-account email and audience).
+  `OauthToken`. The OIDC token is a **real RS256-signed JWT**, and the emulator
+  publishes the matching public key at `/.well-known/openid-configuration`,
+  `/jwks` and `/certs`, so your target can *verify* the token instead of having
+  to skip verification in local runs.
 - Redirects are **not** followed — a 3xx response is a failed dispatch, exactly
   like production.
 - Scheduling via `schedule_time`, retries with exponential backoff
@@ -92,6 +94,9 @@ line (flags win), which is convenient for containers and Compose files.
 | `-host` | `CLOUD_TASKS_EMULATOR_HOST` | `localhost` | Address to bind the gRPC server to |
 | `-port` | `CLOUD_TASKS_EMULATOR_PORT` | `8123` | Port to listen on |
 | `-app-engine-host` | `CLOUD_TASKS_APP_ENGINE_HOST` | _(empty)_ | Base URL used to dispatch `AppEngineHttpRequest` tasks when no host is set on the task or queue, e.g. `http://localhost:8080` |
+| `-queue` (repeatable) | `INITIAL_QUEUES` (comma-separated) | _(none)_ | Full resource name of a queue to create at startup, e.g. `projects/dev/locations/here/queues/myqueue` |
+| `-openid-issuer` | `CLOUD_TASKS_OPENID_ISSUER` | _(empty)_ | Base URL to serve the OpenID discovery endpoints on, e.g. `http://localhost:8980`. Also becomes the `iss` claim of dispatched OIDC tokens |
+| `-hard-reset-on-purge-queue` | `CLOUD_TASKS_HARD_RESET_ON_PURGE_QUEUE` | `false` | Drop task-name history when a queue is purged, so purged names can be reused immediately |
 
 ```bash
 docker run --rm -p 8123:8123 \
@@ -99,6 +104,33 @@ docker run --rm -p 8123:8123 \
   -e CLOUD_TASKS_APP_ENGINE_HOST=http://host.docker.internal:8080 \
   ghcr.io/ken109/cloud-tasks-emulator:latest
 ```
+
+### Verifying OIDC tokens locally
+
+Production Cloud Tasks attaches a Google-signed OIDC token when a task carries
+an `OidcToken`, and a Cloud Run service deployed without
+`--allow-unauthenticated` rejects the request unless that token verifies. To
+reproduce that locally, give the emulator an issuer URL:
+
+```bash
+docker run --rm -p 8123:8123 -p 8980:8980 \
+  ghcr.io/ken109/cloud-tasks-emulator:latest \
+  -host 0.0.0.0 -openid-issuer http://localhost:8980
+```
+
+Dispatched tokens are then signed with RS256 and carry `iss:
+http://localhost:8980`, and the public key is published at:
+
+| Path | Content |
+|------|---------|
+| `/.well-known/openid-configuration` | OpenID discovery document |
+| `/jwks` | Public key as a JWK set |
+| `/certs` | `{kid: PEM certificate}`, the shape Google serves at `/oauth2/v1/certs` |
+
+Point your verifier's issuer/JWKS URL at the emulator and the same verification
+code you run in production passes locally, unchanged. Without `-openid-issuer`
+the tokens are still signed, but carry the production `iss`
+(`https://accounts.google.com`), whose keys the emulator obviously cannot own.
 
 ## Connecting a client
 
@@ -210,6 +242,66 @@ client, _ := cloudtasks.NewClient(ctx, option.WithGRPCConn(conn))
 `emulator.Config` lets you tune `DefaultAppEngineHost`, `TaskTTL` and
 `TombstoneTTL` (handy for shortening the lifecycle in tests).
 
+## Migrating from aertje/cloud-tasks-emulator
+
+[aertje/cloud-tasks-emulator](https://github.com/aertje/cloud-tasks-emulator) is
+the emulator most projects reach for first. This one is a from-scratch
+implementation, not a fork, but the command-line surface is deliberately
+compatible: **swapping the image name is usually the whole migration.**
+
+```diff
+ services:
+   cloud-tasks:
+-    image: ghcr.io/aertje/cloud-tasks-emulator:latest
++    image: ghcr.io/ken109/cloud-tasks-emulator:latest
+     command: -host 0.0.0.0 -port 8123 -queue projects/dev/locations/here/queues/default
+```
+
+### Flag mapping
+
+| aertje flag | Here | Notes |
+|-------------|------|-------|
+| `-host` / `-port` | same | Same defaults (`localhost` / `8123`) |
+| `-queue` (repeatable) | same | `INITIAL_QUEUES` env fallback also matches |
+| `-hard-reset-on-purge-queue` | same | Same meaning |
+| `-openid-issuer` | same | Same discovery paths: `/.well-known/openid-configuration`, `/jwks`, `/certs` |
+| — | `-app-engine-host` | Default host for App Engine targets |
+
+### What you gain
+
+- **`google.cloud.tasks.v2beta3` as well as `v2`**, from one shared engine.
+  aertje moved off v2beta3 to serve v2 only
+  ([aertje#8](https://github.com/aertje/cloud-tasks-emulator/issues/8)), so a
+  client pinned to v2beta3 has nowhere to point. Queue-level HTTP target
+  overrides, per-queue `task_ttl` / `tombstone_ttl`, `PULL` queues and
+  `QueueStats` come with that surface.
+- **A published image that matches the source.** Images are built from the same
+  commit in the same workflow that runs the tests, and the release job starts
+  the built image and drives it with the official client before publishing —
+  the failure mode reported in
+  [aertje#113](https://github.com/aertje/cloud-tasks-emulator/issues/113)
+  (`/certs` and the Docker image out of sync with master) cannot ship here.
+- **`UpdateQueue`**, pagination on `ListQueues` / `ListTasks`, the IAM methods,
+  `CreateTask` resource-limit validation, task-name tombstones and task TTL.
+- **The full retry-header set** including `X-CloudTasks-TaskPreviousResponse`
+  and `-TaskRetryReason`, and the `X-AppEngine-` prefixed variants for App
+  Engine targets.
+- **An in-process Go API** (`emulator.New(...).Register(grpcServer)`), so Go
+  tests can skip Docker entirely.
+- **100% statement coverage, enforced in CI**, and a test suite that verifies
+  dispatched OIDC tokens against the published JWKS and certificate rather than
+  just asserting a token is present.
+
+### Behaviour differences to know about
+
+- Purged task names stay reserved unless you pass
+  `-hard-reset-on-purge-queue`; aertje's default is closer to a hard reset.
+- OIDC tokens are signed with a key generated per process, so restarting the
+  emulator rotates the key. Fetch the JWKS at verification time rather than
+  caching it across restarts.
+- There is no `-openid-issuer`-less discovery endpoint: with no issuer
+  configured, nothing is served over HTTP and tokens carry the production `iss`.
+
 ## Behaviour notes
 
 - **State is in memory.** Restarting the emulator clears all queues and tasks.
@@ -217,6 +309,9 @@ client, _ := cloudtasks.NewClient(ctx, option.WithGRPCConn(conn))
 - **Failed dispatch** is retried per the queue's `RetryConfig` until
   `max_attempts` or `max_retry_duration` is reached, then the task is dropped.
 - `RunTask` forces an immediate dispatch attempt regardless of `schedule_time`.
+- **Purged task names stay reserved** for the tombstone window, as in
+  production. Pass `-hard-reset-on-purge-queue` if your tests purge a queue and
+  immediately recreate the same fixed task names.
 - App Engine targets need a reachable host: set one via the task's
   `app_engine_routing.host`, the queue's `app_engine_routing_override.host`, or
   the `-app-engine-host` flag.
@@ -237,8 +332,9 @@ client, _ := cloudtasks.NewClient(ctx, option.WithGRPCConn(conn))
 - All state is in memory; nothing is persisted across restarts.
 - `ListQueues` ignores the `filter` argument (all queues in the parent are
   returned, paginated).
-- OIDC tokens are unsigned (`alg=none`) JWTs — the emulator cannot mint
-  Google-signed tokens — and OAuth tokens are placeholders.
+- OIDC tokens are signed by the emulator's own key, not by Google. Verify them
+  against the emulator's issuer (`-openid-issuer`), not against Google's certs.
+  OAuth tokens are placeholders.
 - App Engine 503 "slow down delivery" pacing is not modelled; the emulator
   dispatches immediately and treats any non-2xx as a retryable failure.
 
