@@ -1,0 +1,29 @@
+# Runnable example: an emulator with a queue already created and OIDC token
+# verification available.
+#
+#   docker compose up
+#
+# Then point a Cloud Tasks client at localhost:8123 over an insecure gRPC
+# connection, and your OIDC verifier at http://localhost:8980.
+
+services:
+  cloud-tasks:
+    image: ghcr.io/ken109/cloud-tasks-emulator:latest
+    ports:
+      - "8123:8123"
+      - "8980:8980"
+    command:
+      - -host=0.0.0.0
+      - -port=8123
+      # Pre-create the queues the application expects, so nothing has to call
+      # CreateQueue on boot. Repeat the flag for more, or set INITIAL_QUEUES.
+      - -queue=projects/local/locations/us-central1/queues/default
+      # Serve the OpenID discovery endpoints so a target can verify the OIDC
+      # token attached to a dispatched task. Drop this if you do not verify.
+      - -openid-issuer=http://localhost:8980
+      # Tasks with an App Engine target, and tasks whose URL points at the
+      # host, need to reach out of the container.
+      - -app-engine-host=http://host.docker.internal:8080
+    extra_hosts:
+      # Linux does not resolve host.docker.internal by default.
+      - "host.docker.internal:host-gateway"

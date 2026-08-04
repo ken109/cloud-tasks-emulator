@@ -1,5 +1,11 @@
 # cloud-tasks-emulator
 
+[![CI](https://github.com/ken109/cloud-tasks-emulator/actions/workflows/ci.yml/badge.svg)](https://github.com/ken109/cloud-tasks-emulator/actions/workflows/ci.yml)
+[![coverage 100%](https://img.shields.io/badge/coverage-100%25-brightgreen)](#development)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ken109/cloud-tasks-emulator.svg)](https://pkg.go.dev/github.com/ken109/cloud-tasks-emulator)
+[![ghcr.io](https://img.shields.io/badge/ghcr.io-cloud--tasks--emulator-blue)](https://github.com/ken109/cloud-tasks-emulator/pkgs/container/cloud-tasks-emulator)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A local, in-memory emulator for [Google Cloud Tasks](https://cloud.google.com/tasks),
 in the spirit of the official Cloud Pub/Sub emulator (`gcloud beta emulators pubsub`).
 
@@ -80,9 +86,20 @@ docker build -t cloud-tasks-emulator .
 docker run --rm -p 8123:8123 cloud-tasks-emulator
 ```
 
-Images are published automatically on every push to `main` (tagged `latest`)
-and on `v*` release tags (tagged with the semver version) by the
-[Publish Docker image](.github/workflows/docker-publish.yml) workflow.
+Or with Compose — see [`compose.yaml`](compose.yaml) for a runnable example with
+a pre-created queue and OIDC verification wired up:
+
+```bash
+docker compose up
+```
+
+Images are published on every push to `main` (tagged `latest`) and on `v*`
+release tags (tagged with the semver version) by the
+[Publish Docker image](.github/workflows/docker-publish.yml) workflow. That
+workflow runs the [full CI suite](.github/workflows/ci.yml) first — including a
+smoke test that starts the image it is about to publish and drives it with the
+official client — so a published image always matches the commit it claims.
+Images carry an SBOM and attested build provenance.
 
 ### Configuration
 
@@ -349,6 +366,20 @@ make hooks   # install the lefthook git hooks
 ```
 
 The test suite is kept at **100% statement coverage**, enforced in CI.
+
+`conformance/` holds checks that drive a *running* emulator with the official
+client libraries, which the Go suite cannot do — it shares the emulator's own
+types. Start an emulator, then:
+
+```bash
+pip install -r conformance/python/requirements.txt
+EMULATOR_ADDR=127.0.0.1:8123 python conformance/python/check.py
+
+cd conformance/node && npm ci
+EMULATOR_ADDR=127.0.0.1:8123 node check.mjs
+```
+
+CI runs both against a freshly built binary and against the release image.
 
 [lefthook](https://lefthook.dev) runs `gofmt`/`go vet` on commit and the test
 suite on push. Install the hooks once with `make hooks` (requires the
