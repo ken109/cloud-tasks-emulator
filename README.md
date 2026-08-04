@@ -1,6 +1,6 @@
 # cloud-tasks-emulator
 
-[![CI](https://github.com/ken109/cloud-tasks-emulator/actions/workflows/ci.yml/badge.svg)](https://github.com/ken109/cloud-tasks-emulator/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/ken109/cloud-tasks-emulator/docker-publish.yml?branch=main&label=CI)](https://github.com/ken109/cloud-tasks-emulator/actions/workflows/docker-publish.yml)
 [![coverage 100%](https://img.shields.io/badge/coverage-100%25-brightgreen)](#development)
 [![Go Reference](https://pkg.go.dev/badge/github.com/ken109/cloud-tasks-emulator.svg)](https://pkg.go.dev/github.com/ken109/cloud-tasks-emulator)
 [![ghcr.io](https://img.shields.io/badge/ghcr.io-cloud--tasks--emulator-blue)](https://github.com/ken109/cloud-tasks-emulator/pkgs/container/cloud-tasks-emulator)

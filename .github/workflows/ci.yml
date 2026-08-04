@@ -1,18 +1,20 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
-  # The publish workflow runs these same gates before it pushes an image.
+  # The publish workflow runs these same gates before it pushes an image, so
+  # pushes to main are covered there rather than by a second run here.
   workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # github.workflow is the *caller's* workflow for a workflow_call, so a run
+  # invoked by the publish workflow lands in its own group instead of
+  # cancelling — or being cancelled by — a run of this workflow.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
