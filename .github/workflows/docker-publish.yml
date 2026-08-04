@@ -91,12 +91,16 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Create the release
+      - name: Create or update the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --generate-notes \
-            --notes "Image: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG#v}\`"
+          notes="Image: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG#v}\`"
+          # Re-pushing a tag must not fail the run just because its release
+          # already exists; point the existing one at the new commit instead.
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --target "$GITHUB_SHA" --notes "$notes"
+          else
+            gh release create "$TAG" --title "$TAG" --generate-notes --notes "$notes"
+          fi
