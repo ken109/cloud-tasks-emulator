@@ -94,7 +94,7 @@ func (e *Engine) buildAppEngineRequest(q *Queue, t *Task, info attemptInfo) (*ht
 	}
 	req.Header.Set("User-Agent", appEngineUserAgent)
 	setSystemHeaders(req, "X-AppEngine", q, t, info)
-	req.Header.Set("X-AppEngine-FailFast", "false")
+	setRawHeader(req.Header, "X-AppEngine-FailFast", "false")
 	return req, nil
 }
 
@@ -183,18 +183,26 @@ func newRequest(method, rawURL string, body []byte, headers map[string]string) (
 	return req, nil
 }
 
+// setRawHeader sets a header without Go's canonicalisation, which would turn
+// X-CloudTasks-QueueName into X-Cloudtasks-Queuename. Header names are
+// case-insensitive per RFC 9110, but plenty of handlers match the documented
+// Cloud Tasks casing exactly, so the emulator emits it verbatim.
+func setRawHeader(h http.Header, key, value string) {
+	h[key] = []string{value}
+}
+
 func setSystemHeaders(req *http.Request, prefix string, q *Queue, t *Task, info attemptInfo) {
 	eta := t.ScheduleTime
-	req.Header.Set(prefix+"-QueueName", queueID(q.Name))
-	req.Header.Set(prefix+"-TaskName", taskID(t.Name))
-	req.Header.Set(prefix+"-TaskRetryCount", strconv.Itoa(int(info.number-1)))
-	req.Header.Set(prefix+"-TaskExecutionCount", strconv.Itoa(int(info.executionCount)))
-	req.Header.Set(prefix+"-TaskETA", fmt.Sprintf("%d.%06d", eta.Unix(), eta.Nanosecond()/1000))
+	setRawHeader(req.Header, prefix+"-QueueName", queueID(q.Name))
+	setRawHeader(req.Header, prefix+"-TaskName", taskID(t.Name))
+	setRawHeader(req.Header, prefix+"-TaskRetryCount", strconv.Itoa(int(info.number-1)))
+	setRawHeader(req.Header, prefix+"-TaskExecutionCount", strconv.Itoa(int(info.executionCount)))
+	setRawHeader(req.Header, prefix+"-TaskETA", fmt.Sprintf("%d.%06d", eta.Unix(), eta.Nanosecond()/1000))
 	if info.prevHTTPCode != 0 {
-		req.Header.Set(prefix+"-TaskPreviousResponse", strconv.Itoa(info.prevHTTPCode))
+		setRawHeader(req.Header, prefix+"-TaskPreviousResponse", strconv.Itoa(info.prevHTTPCode))
 	}
 	if info.prevReason != "" {
-		req.Header.Set(prefix+"-TaskRetryReason", info.prevReason)
+		setRawHeader(req.Header, prefix+"-TaskRetryReason", info.prevReason)
 	}
 }
 

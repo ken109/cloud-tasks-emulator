@@ -1,6 +1,7 @@
 package core
 
 import (
+	"net/http"
 	"testing"
 	"time"
 )
@@ -72,5 +73,54 @@ func TestEngineSignerUsesConfiguredIssuer(t *testing.T) {
 	}
 	if got := NewEngine(Config{}).Signer().Issuer(); got != defaultOIDCIssuer {
 		t.Errorf("default Signer().Issuer() = %q", got)
+	}
+}
+
+// rawHeader reads a header by its exact key, bypassing the canonicalisation
+// http.Header.Get would apply.
+func rawHeader(h http.Header, key string) string {
+	if v := h[key]; len(v) > 0 {
+		return v[0]
+	}
+	return ""
+}
+
+// TestSystemHeadersKeepProductionCasing pins the exact header names Cloud Tasks
+// documents. Go canonicalises X-CloudTasks-QueueName to X-Cloudtasks-Queuename
+// on Set, and a handler matching the documented casing would then miss it.
+func TestSystemHeadersKeepProductionCasing(t *testing.T) {
+	e := NewEngine(Config{DefaultAppEngineHost: "http://svc"})
+	q := &Queue{Name: "projects/p/locations/l/queues/myqueue"}
+
+	httpTask := &Task{Name: q.Name + "/tasks/mytask", Target: Target{Type: TargetHTTP, URL: "http://h/p"}}
+	req, err := e.buildRequest(q, httpTask, attemptInfo{number: 1, prevHTTPCode: 500, prevReason: "RETURNED_500"})
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+	for key, want := range map[string]string{
+		"X-CloudTasks-QueueName":            "myqueue",
+		"X-CloudTasks-TaskName":             "mytask",
+		"X-CloudTasks-TaskRetryCount":       "0",
+		"X-CloudTasks-TaskExecutionCount":   "0",
+		"X-CloudTasks-TaskPreviousResponse": "500",
+		"X-CloudTasks-TaskRetryReason":      "RETURNED_500",
+	} {
+		if got := rawHeader(req.Header, key); got != want {
+			t.Errorf("%s = %q, want %q (keys: %v)", key, got, want, req.Header)
+		}
+	}
+	if _, canonicalised := req.Header["X-Cloudtasks-Queuename"]; canonicalised {
+		t.Error("header was canonicalised; production sends X-CloudTasks-QueueName")
+	}
+
+	aeTask := &Task{Name: q.Name + "/tasks/aetask", Target: Target{Type: TargetAppEngine, RelativeURI: "/work"}}
+	req, err = e.buildRequest(q, aeTask, attemptInfo{number: 1})
+	if err != nil {
+		t.Fatalf("buildRequest (app engine): %v", err)
+	}
+	for _, key := range []string{"X-AppEngine-QueueName", "X-AppEngine-TaskName", "X-AppEngine-FailFast"} {
+		if rawHeader(req.Header, key) == "" {
+			t.Errorf("missing %s (keys: %v)", key, req.Header)
+		}
 	}
 }

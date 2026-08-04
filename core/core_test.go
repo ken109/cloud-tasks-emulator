@@ -204,13 +204,13 @@ func TestBuildHTTPRequestHeadersAndAuth(t *testing.T) {
 	if req.Header.Get("User-Agent") != httpUserAgent {
 		t.Error("ua")
 	}
-	if req.Header.Get("X-CloudTasks-TaskRetryCount") != "2" || req.Header.Get("X-CloudTasks-TaskExecutionCount") != "1" {
+	if rawHeader(req.Header, "X-CloudTasks-TaskRetryCount") != "2" || rawHeader(req.Header, "X-CloudTasks-TaskExecutionCount") != "1" {
 		t.Error("counts")
 	}
-	if req.Header.Get("X-CloudTasks-TaskETA") != "123.000456" {
-		t.Errorf("eta %q", req.Header.Get("X-CloudTasks-TaskETA"))
+	if rawHeader(req.Header, "X-CloudTasks-TaskETA") != "123.000456" {
+		t.Errorf("eta %q", rawHeader(req.Header, "X-CloudTasks-TaskETA"))
 	}
-	if req.Header.Get("X-CloudTasks-TaskPreviousResponse") != "500" || req.Header.Get("X-CloudTasks-TaskRetryReason") != "RETURNED_500" {
+	if rawHeader(req.Header, "X-CloudTasks-TaskPreviousResponse") != "500" || rawHeader(req.Header, "X-CloudTasks-TaskRetryReason") != "RETURNED_500" {
 		t.Error("prev headers")
 	}
 	if req.Header.Get("Content-Type") != "application/octet-stream" {
@@ -253,7 +253,7 @@ func TestAppEngineRequest(t *testing.T) {
 	if err != nil || req.URL.String() != "http://svc/work" {
 		t.Fatalf("ae req %v %v", req, err)
 	}
-	if req.Header.Get("User-Agent") != appEngineUserAgent || req.Header.Get("X-AppEngine-FailFast") != "false" {
+	if req.Header.Get("User-Agent") != appEngineUserAgent || rawHeader(req.Header, "X-AppEngine-FailFast") != "false" {
 		t.Error("ae headers")
 	}
 }
