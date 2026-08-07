@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@google-cloud/tasks": "^6.0.0",
-    "@grpc/grpc-js": "^1.12.0"
+    "@grpc/grpc-js": "^1.12.0",
+    "google-auth-library": "11.0.0"
   }
 }

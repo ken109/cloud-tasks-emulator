@@ -30,6 +30,7 @@ var logFatalf = log.Fatalf
 type options struct {
 	host          string
 	port          string
+	restPort      string
 	appEngineHost string
 	openIDIssuer  string
 	hardReset     bool
@@ -40,6 +41,7 @@ type options struct {
 // them to discover the addresses when binding to port 0.
 type hooks struct {
 	grpcReady   func(addr string)
+	restReady   func(addr string)
 	openIDReady func(addr string)
 }
 
@@ -70,6 +72,7 @@ func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 type flagValues struct {
 	host          *string
 	port          *string
+	restPort      *string
 	appEngineHost *string
 	openIDIssuer  *string
 	hardReset     *bool
@@ -83,6 +86,7 @@ func registerFlags(fs *flag.FlagSet) *flagValues {
 	v := &flagValues{}
 	v.host = fs.String("host", envOr("CLOUD_TASKS_EMULATOR_HOST", "localhost"), "host/address to bind to (env: CLOUD_TASKS_EMULATOR_HOST)")
 	v.port = fs.String("port", envOr("CLOUD_TASKS_EMULATOR_PORT", "8123"), "port to listen on (env: CLOUD_TASKS_EMULATOR_PORT)")
+	v.restPort = fs.String("rest-port", envOr("CLOUD_TASKS_REST_PORT", "8124"), "port to serve the REST/JSON API on; empty disables it (env: CLOUD_TASKS_REST_PORT)")
 	v.appEngineHost = fs.String("app-engine-host", envOr("CLOUD_TASKS_APP_ENGINE_HOST", ""), "default base URL for App Engine HTTP task targets (env: CLOUD_TASKS_APP_ENGINE_HOST)")
 	v.openIDIssuer = fs.String("openid-issuer", envOr("CLOUD_TASKS_OPENID_ISSUER", ""), "base URL to serve the OpenID discovery endpoints on, e.g. http://localhost:8980; also the iss claim of dispatched OIDC tokens (env: CLOUD_TASKS_OPENID_ISSUER)")
 	v.hardReset = fs.Bool("hard-reset-on-purge-queue", envBool("CLOUD_TASKS_HARD_RESET_ON_PURGE_QUEUE"), "drop task-name history when a queue is purged, so purged names can be reused immediately (env: CLOUD_TASKS_HARD_RESET_ON_PURGE_QUEUE)")
@@ -104,6 +108,7 @@ func parseFlags(prog string, args []string) options {
 	return options{
 		host:          *v.host,
 		port:          *v.port,
+		restPort:      *v.restPort,
 		appEngineHost: *v.appEngineHost,
 		openIDIssuer:  *v.openIDIssuer,
 		hardReset:     *v.hardReset,
@@ -138,6 +143,15 @@ func run(opts options, stop <-chan struct{}, h hooks) error {
 		return err
 	}
 
+	restServer, err := startRESTServer(emu, opts, h.restReady)
+	if err != nil {
+		lis.Close()
+		if openIDServer != nil {
+			openIDServer.Close()
+		}
+		return err
+	}
+
 	grpcServer := grpc.NewServer()
 	emu.Register(grpcServer)
 	reflection.Register(grpcServer)
@@ -146,6 +160,9 @@ func run(opts options, stop <-chan struct{}, h hooks) error {
 		<-stop
 		if openIDServer != nil {
 			openIDServer.Close()
+		}
+		if restServer != nil {
+			restServer.Close()
 		}
 		grpcServer.GracefulStop()
 	}()
@@ -157,6 +174,36 @@ func run(opts options, stop <-chan struct{}, h hooks) error {
 	log.Printf("Cloud Tasks emulator listening on %s", boundAddr)
 	log.Printf("Set your client's endpoint to %s and use an insecure connection.", boundAddr)
 	return grpcServer.Serve(lis)
+}
+
+// restHandlerFor is a seam so tests can exercise the failure path: building the
+// handler only fails if the compiled protos lost their HTTP bindings, which no
+// runtime input can cause.
+var restHandlerFor = (*emulator.Emulator).RESTHandler
+
+// startRESTServer serves the REST/JSON API next to the gRPC one. It returns a
+// nil server when no REST port is configured.
+func startRESTServer(emu *emulator.Emulator, opts options, ready func(addr string)) (*http.Server, error) {
+	if opts.restPort == "" {
+		return nil, nil
+	}
+	handler, err := restHandlerFor(emu)
+	if err != nil {
+		return nil, err
+	}
+	lis, err := net.Listen("tcp", net.JoinHostPort(opts.host, opts.restPort))
+	if err != nil {
+		return nil, err
+	}
+	srv := &http.Server{Handler: handler}
+	// Serve only returns once we close the server at shutdown, and the listener
+	// is ours, so there is no error worth surfacing here.
+	go func() { _ = srv.Serve(lis) }()
+	if ready != nil {
+		ready(lis.Addr().String())
+	}
+	log.Printf("REST API listening on http://%s (e.g. GET /v2/projects/p/locations/l/queues)", lis.Addr())
+	return srv, nil
 }
 
 // startOpenIDServer serves handler on the port of the issuer URL. It returns a

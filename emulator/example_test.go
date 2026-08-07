@@ -2,11 +2,13 @@ package emulator_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"time"
 
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
@@ -189,6 +191,37 @@ func ExampleEmulator_OpenIDHandler() {
 	// Output:
 	// discovery: 200
 	// jwks: 200
+}
+
+// ExampleEmulator_RESTHandler serves the REST/JSON API, for clients and tools
+// that do not speak gRPC. The same emulator can serve both surfaces at once.
+func ExampleEmulator_RESTHandler() {
+	handler, err := emulator.New(emulator.Config{}).RESTHandler()
+	if err != nil {
+		log.Fatal(err)
+	}
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/v2/projects/my-project/locations/us-central1/queues",
+		"application/json",
+		strings.NewReader(`{"name":"projects/my-project/locations/us-central1/queues/default"}`))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var queue struct {
+		Name  string `json:"name"`
+		State string `json:"state"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&queue); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(resp.StatusCode, queue.Name, queue.State)
+
+	// Output:
+	// 200 projects/my-project/locations/us-central1/queues/default RUNNING
 }
 
 // ExampleEmulator_EnsureQueue pre-creates a queue, so an application under test

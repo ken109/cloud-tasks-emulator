@@ -90,7 +90,7 @@ jobs:
         run: |
           go build -o /tmp/cloud-tasks-emulator .
           # An issuer is needed for the OIDC verification check.
-          /tmp/cloud-tasks-emulator -host 127.0.0.1 -port 8123 \
+          /tmp/cloud-tasks-emulator -host 127.0.0.1 -port 8123 -rest-port 8124 \
             -openid-issuer http://127.0.0.1:8980 &
           timeout 30 bash -c 'until (echo > /dev/tcp/127.0.0.1/8123) 2>/dev/null; do sleep 0.5; done'
 
@@ -108,6 +108,10 @@ jobs:
           # emulator's published endpoints.
           EMULATOR_ADDR=127.0.0.1:8123 OPENID_ISSUER=http://127.0.0.1:8980 \
             python conformance/python/check_oidc.py
+          # The REST surface, driven by the same client's REST transport: it
+          # builds the URLs and JSON itself, so this is the only check that can
+          # catch a transcoding mistake.
+          REST_ADDR=http://127.0.0.1:8124 python conformance/python/check_rest.py
 
       - uses: actions/setup-node@v6
         if: matrix.client == 'node'
@@ -121,6 +125,7 @@ jobs:
         run: |
           npm ci
           EMULATOR_ADDR=127.0.0.1:8123 node check.mjs
+          REST_ADDR=127.0.0.1:8124 node check_rest.mjs
 
   image:
     name: image smoke test
@@ -148,13 +153,15 @@ jobs:
           # --network host lets the containerised emulator dispatch back to the
           # target the conformance script starts on the runner.
           docker run -d --name cte --network host cloud-tasks-emulator:ci \
-            -host 0.0.0.0 -port 8123 -openid-issuer http://127.0.0.1:8980
+            -host 0.0.0.0 -port 8123 -rest-port 8124 \
+            -openid-issuer http://127.0.0.1:8980
           timeout 30 bash -c 'until (echo > /dev/tcp/127.0.0.1/8123) 2>/dev/null; do sleep 0.5; done'
 
           pip install -r conformance/python/requirements.txt
           EMULATOR_ADDR=127.0.0.1:8123 python conformance/python/check.py
           EMULATOR_ADDR=127.0.0.1:8123 OPENID_ISSUER=http://127.0.0.1:8980 \
             python conformance/python/check_oidc.py
+          REST_ADDR=http://127.0.0.1:8124 python conformance/python/check_rest.py
 
           # The discovery endpoints must be live in the published image too.
           for path in /.well-known/openid-configuration /jwks /certs; do

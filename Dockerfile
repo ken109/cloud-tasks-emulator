@@ -20,6 +20,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # --- runtime stage ---------------------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/cloud-tasks-emulator /cloud-tasks-emulator
-EXPOSE 8123
+EXPOSE 8123 8124
 ENTRYPOINT ["/cloud-tasks-emulator"]
 CMD ["-host", "0.0.0.0", "-port", "8123"]

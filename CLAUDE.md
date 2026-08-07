@@ -24,11 +24,18 @@ Layout:
 - `emulator/emulator.go` — public API: `New(Config)` + `Register(*grpc.Server)`.
 - `emulator/v2.go`, `emulator/v2beta3.go` — the two gRPC adapters.
 - `emulator/conv.go` — shared proto↔core helpers.
+- `emulator/rest.go` — `RESTHandler()`, wiring both services into the transcoder.
+- `rest/` — REST/JSON transcoder. Knows nothing about Cloud Tasks: it derives
+  its routes from the `google.api.http` annotations on a `grpc.ServiceDesc` and
+  invokes the generated gRPC handler, so REST and gRPC share one code path.
+  Adding an API method needs no work here.
 - `conformance/{python,node}/` — checks that drive a *running* emulator with
   the official client libraries. The Go suite shares the emulator's own types,
   so only these can catch wire-level mismatches (they found the system-header
   casing bug). `check_oidc.py` additionally verifies a dispatched token with a
-  real JWT library. CI runs them against both a built binary and the image.
+  real JWT library, and `check_rest.py` / `check_rest.mjs` drive the REST
+  surface with the clients' own REST transports — the only check that can catch
+  a transcoding mistake. CI runs them against both a built binary and the image.
 - `docs/` — guides for paths that need more than a README section.
 - `emulator/example_test.go` — the pkg.go.dev examples; they run in CI, so Go
   snippets cannot rot.
@@ -55,9 +62,9 @@ suite at **100% statement coverage** (`make cover`); CI fails the build below
 100%. [lefthook](https://lefthook.dev) enforces `gofmt`/`go vet` on commit and
 the tests plus lint on push.
 
-Changing anything on the wire — request headers, token shape, the gRPC surface
-— means updating the conformance checks too, since that is the only place the
-official clients get a vote.
+Changing anything on the wire — request headers, token shape, the gRPC or REST
+surface — means updating the conformance checks too, since that is the only
+place the official clients get a vote.
 
 ## Commit conventions
 

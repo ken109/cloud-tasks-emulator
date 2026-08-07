@@ -26,6 +26,9 @@ retry/backoff and rate-limit policy, just like production.
   `UpdateQueue` / `DeleteQueue` / `PurgeQueue` / `PauseQueue` / `ResumeQueue`,
   `CreateTask` / `GetTask` / `ListTasks` / `DeleteTask` / `RunTask`, and the IAM
   methods — both versions served from one shared engine.
+- A **REST/JSON API** alongside gRPC (`-rest-port`, default `8124`), serving the
+  same URLs as `cloudtasks.googleapis.com` for both versions — so `curl`, and
+  clients that do not speak gRPC, work too.
 - Real HTTP task dispatch for both **HTTP targets** (`HttpRequest`) and
   **App Engine targets** (`AppEngineHttpRequest`).
 - Full Cloud Tasks request headers, with the correct prefix per target type:
@@ -110,6 +113,7 @@ line (flags win), which is convenient for containers and Compose files.
 |------|---------|---------|-------------|
 | `-host` | `CLOUD_TASKS_EMULATOR_HOST` | `localhost` | Address to bind the gRPC server to |
 | `-port` | `CLOUD_TASKS_EMULATOR_PORT` | `8123` | Port to listen on |
+| `-rest-port` | `CLOUD_TASKS_REST_PORT` | `8124` | Port for the REST/JSON API; set it empty to disable |
 | `-app-engine-host` | `CLOUD_TASKS_APP_ENGINE_HOST` | _(empty)_ | Base URL used to dispatch `AppEngineHttpRequest` tasks when no host is set on the task or queue, e.g. `http://localhost:8080` |
 | `-queue` (repeatable) | `INITIAL_QUEUES` (comma-separated) | _(none)_ | Full resource name of a queue to create at startup, e.g. `projects/dev/locations/here/queues/myqueue` |
 | `-openid-issuer` | `CLOUD_TASKS_OPENID_ISSUER` | _(empty)_ | Base URL to serve the OpenID discovery endpoints on, e.g. `http://localhost:8980`. Also becomes the `iss` claim of dispatched OIDC tokens |
@@ -207,6 +211,68 @@ const client = new CloudTasksClient({
 });
 ```
 
+## REST / JSON API
+
+Not every client speaks gRPC. The emulator also serves the REST surface of both
+versions on `-rest-port` (default `8124`). The routes are not hand-written: they
+are transcoded at startup from the `google.api.http` annotations the official
+protos already carry, so they are the URLs `cloudtasks.googleapis.com` serves
+for the same proto version, and they cannot drift from it.
+
+```bash
+curl -X POST http://localhost:8124/v2/projects/p/locations/l/queues \
+  -d '{"name":"projects/p/locations/l/queues/default"}'
+
+curl http://localhost:8124/v2/projects/p/locations/l/queues
+curl -X POST http://localhost:8124/v2/projects/p/locations/l/queues/default:pause -d '{}'
+```
+
+Errors arrive in the Google JSON shape, which is what the client libraries parse
+to rebuild the status:
+
+```json
+{"error":{"code":404,"message":"queue \"...\" not found","status":"NOT_FOUND"}}
+```
+
+The official clients all have a REST transport to point at it:
+
+```go
+client, _ := cloudtasks.NewRESTClient(ctx,
+    option.WithEndpoint("http://localhost:8124"),
+    option.WithoutAuthentication())
+```
+
+```python
+from google.api_core.client_options import ClientOptions
+from google.auth.credentials import AnonymousCredentials
+
+client = tasks_v2.CloudTasksClient(
+    transport="rest",
+    credentials=AnonymousCredentials(),
+    client_options=ClientOptions(api_endpoint="http://localhost:8124"),
+)
+```
+
+```js
+const {PassThroughClient} = require('google-auth-library');
+const client = new CloudTasksClient({
+  fallback: 'rest',
+  protocol: 'http',
+  apiEndpoint: 'localhost',
+  port: 8124,
+  authClient: new PassThroughClient(),
+});
+```
+
+The conformance suite drives this surface with the Python and Node clients' own
+REST transports on every commit, so the snippets above are checked rather than
+assumed.
+
+Two limits worth knowing: the standard system parameters (`fields`,
+`prettyPrint`, ...) are accepted and ignored rather than honoured, and no
+discovery document is served, so clients built on `googleapiclient.discovery`
+have nothing to fetch.
+
 ## Using in tests
 
 **[docs/testing.md](docs/testing.md)** covers this properly: choosing between
@@ -290,6 +356,7 @@ compatible: **swapping the image name is usually the whole migration.**
 | `-hard-reset-on-purge-queue` | same | Same meaning |
 | `-openid-issuer` | same | Same discovery paths: `/.well-known/openid-configuration`, `/jwks`, `/certs` |
 | — | `-app-engine-host` | Default host for App Engine targets |
+| — | `-rest-port` | Serves the REST/JSON API; aertje serves gRPC only |
 
 ### What you gain
 
@@ -305,6 +372,10 @@ compatible: **swapping the image name is usually the whole migration.**
   the failure mode reported in
   [aertje#113](https://github.com/aertje/cloud-tasks-emulator/issues/113)
   (`/certs` and the Docker image out of sync with master) cannot ship here.
+- **A REST/JSON API.** aertje serves gRPC only, so anything built on a REST
+  client — `curl`, the clients' own REST transports, the PHP and discovery-based
+  libraries — cannot talk to it at all
+  ([aertje#90](https://github.com/aertje/cloud-tasks-emulator/issues/90)).
 - **`UpdateQueue`**, pagination on `ListQueues` / `ListTasks`, the IAM methods,
   `CreateTask` resource-limit validation, task-name tombstones and task TTL.
 - **The full retry-header set** including `X-CloudTasks-TaskPreviousResponse`

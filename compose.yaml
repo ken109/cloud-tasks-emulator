@@ -4,17 +4,22 @@
 #   docker compose up
 #
 # Then point a Cloud Tasks client at localhost:8123 over an insecure gRPC
-# connection, and your OIDC verifier at http://localhost:8980.
+# connection (or at http://localhost:8124 for the REST/JSON API), and your OIDC
+# verifier at http://localhost:8980.
 
 services:
   cloud-tasks:
     image: ghcr.io/ken109/cloud-tasks-emulator:latest
     ports:
       - "8123:8123"
+      - "8124:8124"
       - "8980:8980"
     command:
       - -host=0.0.0.0
       - -port=8123
+      # The REST/JSON API, for clients that do not speak gRPC. Pass an empty
+      # value to switch it off.
+      - -rest-port=8124
       # Pre-create the queues the application expects, so nothing has to call
       # CreateQueue on boot. Repeat the flag for more, or set INITIAL_QUEUES.
       - -queue=projects/local/locations/us-central1/queues/default

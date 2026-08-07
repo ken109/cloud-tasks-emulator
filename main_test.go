@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -15,6 +17,8 @@ import (
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/ken109/cloud-tasks-emulator/emulator"
 )
 
 // freePort returns a currently-unused localhost port.
@@ -36,6 +40,9 @@ func TestMainEntrypoint(t *testing.T) {
 	addr := net.JoinHostPort("127.0.0.1", port)
 	t.Setenv("CLOUD_TASKS_EMULATOR_HOST", "127.0.0.1")
 	t.Setenv("CLOUD_TASKS_EMULATOR_PORT", port)
+	// Never the default REST port: the machine running the tests is quite
+	// likely to have an emulator on it already.
+	t.Setenv("CLOUD_TASKS_REST_PORT", freePort(t))
 
 	oldArgs := os.Args
 	os.Args = []string{"cloud-tasks-emulator"}
@@ -323,6 +330,77 @@ func TestRunServesOpenIDDiscovery(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("run did not return after stop")
+	}
+}
+
+// TestRunServesREST checks the REST API comes up next to the gRPC server and
+// answers with the JSON a REST client expects.
+func TestRunServesREST(t *testing.T) {
+	stop := make(chan struct{})
+	restCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+
+	opts := options{host: "127.0.0.1", port: "0", restPort: "0"}
+	go func() {
+		errCh <- run(opts, stop, hooks{restReady: func(addr string) { restCh <- addr }})
+	}()
+
+	var addr string
+	select {
+	case addr = <-restCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("REST server never became ready")
+	}
+
+	const queue = "projects/p/locations/l/queues/q"
+	resp, err := http.Post("http://"+addr+"/v2/projects/p/locations/l/queues",
+		"application/json", strings.NewReader(`{"name":"`+queue+`"}`))
+	if err != nil {
+		t.Fatalf("CreateQueue over REST: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), queue) {
+		t.Fatalf("CreateQueue over REST = %d %s", resp.StatusCode, body)
+	}
+
+	close(stop)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Errorf("run returned error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("run did not return after stop")
+	}
+}
+
+func TestRunRESTErrors(t *testing.T) {
+	// An invalid REST port fails after the gRPC listener is open.
+	if err := run(options{host: "127.0.0.1", port: "0", restPort: "999999"}, make(chan struct{}), hooks{}); err == nil {
+		t.Error("expected an error for an invalid REST port")
+	}
+
+	// The same failure with the OpenID server already running, which must be
+	// shut down on the way out.
+	oldHandler := restHandlerFor
+	defer func() { restHandlerFor = oldHandler }()
+	restHandlerFor = func(*emulator.Emulator) (http.Handler, error) {
+		return nil, errors.New("no HTTP bindings")
+	}
+	opts := options{host: "127.0.0.1", port: "0", restPort: "0", openIDIssuer: "http://127.0.0.1:" + freePort(t)}
+	if err := run(opts, make(chan struct{}), hooks{}); err == nil {
+		t.Error("expected an error when the REST handler cannot be built")
+	}
+}
+
+func TestParseFlagsRESTPort(t *testing.T) {
+	if got := parseFlags("prog", []string{"-rest-port", "9124"}).restPort; got != "9124" {
+		t.Errorf("restPort = %q", got)
+	}
+	t.Setenv("CLOUD_TASKS_REST_PORT", "")
+	if got := parseFlags("prog", nil).restPort; got != "" {
+		t.Errorf("env restPort = %q, want it disabled", got)
 	}
 }
 
