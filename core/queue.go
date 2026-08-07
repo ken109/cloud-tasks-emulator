@@ -26,6 +26,11 @@ type taskState struct {
 	firstAttemptTime time.Time
 	lastHTTPCode     int
 	lastRetryReason  string
+	// executionCount backs X-CloudTasks-TaskExecutionCount, which counts the
+	// responses the handler actually produced: "This number does not include
+	// failures due to 5XX error codes." That is deliberately not the same as
+	// Task.response_count, which counts every attempt that got a response.
+	executionCount int32
 }
 
 // queueState is the runtime representation of a queue.
@@ -171,7 +176,7 @@ func (qs *queueState) snapshotAttempt(ts *taskState) (attemptSnapshot, bool) {
 		scheduled: t.ScheduleTime,
 		info: attemptInfo{
 			number:         t.DispatchCount + 1,
-			executionCount: t.ResponseCount,
+			executionCount: ts.executionCount,
 			prevHTTPCode:   ts.lastHTTPCode,
 			prevReason:     ts.lastRetryReason,
 		},
@@ -194,6 +199,9 @@ func (qs *queueState) applyAttempt(ts *taskState, att *Attempt, dispatchTime tim
 	t.DispatchCount++
 	if httpCode != 0 {
 		t.ResponseCount++
+		if httpCode < 500 {
+			ts.executionCount++
+		}
 	}
 	t.LastAttempt = att
 	if t.FirstAttempt == nil {

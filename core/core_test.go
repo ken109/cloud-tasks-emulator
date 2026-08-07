@@ -122,34 +122,36 @@ func TestApplyURIOverride(t *testing.T) {
 
 func TestPaginate(t *testing.T) {
 	names := []string{"a", "b", "c", "d", "e"}
-	page, next, err := paginate(names, 2, "")
+	page, next, err := paginate(names, 2, "", maxListTasksPageSize)
 	if err != nil || len(page) != 2 || next == "" {
 		t.Fatalf("p1 %v %q %v", page, next, err)
 	}
-	page, next, _ = paginate(names, 2, next)
+	page, next, _ = paginate(names, 2, next, maxListTasksPageSize)
 	if page[0] != "c" || next == "" {
 		t.Fatalf("p2 %v %q", page, next)
 	}
-	page, next, _ = paginate(names, 2, next)
+	page, next, _ = paginate(names, 2, next, maxListTasksPageSize)
 	if page[0] != "e" || next != "" {
 		t.Fatalf("p3 %v %q", page, next)
 	}
-	if p, _, _ := paginate(names, 0, ""); len(p) != 5 {
-		t.Error("default size")
+	// "If unspecified, the page size will be the maximum", so nothing is held
+	// back and no page token is issued.
+	if p, tok, _ := paginate(names, 0, "", maxListTasksPageSize); len(p) != 5 || tok != "" {
+		t.Errorf("unspecified size = %v %q", p, tok)
 	}
-	if _, _, err := paginate(names, maxPageSize+1, ""); err != nil {
+	if _, _, err := paginate(names, maxListTasksPageSize+1, "", maxListTasksPageSize); err != nil {
 		t.Error("cap")
 	}
-	if p, _, _ := paginate(names, 2, enc("99")); len(p) != 0 {
+	if p, _, _ := paginate(names, 2, enc("99"), maxListTasksPageSize); len(p) != 0 {
 		t.Error("out of range")
 	}
-	if _, _, err := paginate(names, 2, "###"); status.Code(err) != codes.InvalidArgument {
+	if _, _, err := paginate(names, 2, "###", maxListTasksPageSize); status.Code(err) != codes.InvalidArgument {
 		t.Error("bad base64")
 	}
-	if _, _, err := paginate(names, 2, enc("x")); status.Code(err) != codes.InvalidArgument {
+	if _, _, err := paginate(names, 2, enc("x"), maxListTasksPageSize); status.Code(err) != codes.InvalidArgument {
 		t.Error("non int")
 	}
-	if _, _, err := paginate(names, 2, enc("-1")); status.Code(err) != codes.InvalidArgument {
+	if _, _, err := paginate(names, 2, enc("-1"), maxListTasksPageSize); status.Code(err) != codes.InvalidArgument {
 		t.Error("negative")
 	}
 }
@@ -731,6 +733,54 @@ func TestRunTaskSuccess(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("run did not dispatch")
+	}
+}
+
+// TestExecutionCountExcludes5xx pins the documented split between the two
+// counters: X-CloudTasks-TaskRetryCount "includes attempts where the task
+// failed due to 5XX error codes", while X-CloudTasks-TaskExecutionCount "does
+// not include failures due to 5XX error codes".
+func TestExecutionCountExcludes5xx(t *testing.T) {
+	e := NewEngine(Config{})
+	q, _ := e.CreateQueue(parent, &Queue{
+		Name:        parent + "/queues/counters",
+		RetryConfig: RetryConfig{MaxAttempts: 4, MinBackoff: time.Millisecond, MaxBackoff: time.Millisecond},
+	})
+
+	type seen struct{ retry, execution string }
+	got := make(chan seen, 4)
+	// 500 first (an attempt that never reached the handler's own logic), then
+	// 400s, which did.
+	var attempt int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- seen{r.Header.Get("X-CloudTasks-TaskRetryCount"), r.Header.Get("X-CloudTasks-TaskExecutionCount")}
+		if atomic.AddInt32(&attempt, 1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer ts.Close()
+
+	if _, err := e.CreateTask(q.Name, &Task{Name: q.Name + "/tasks/c", Target: httpQ(ts.URL)}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []seen{
+		{"0", "0"}, // first attempt
+		{"1", "0"}, // after a 503: retried, but nothing executed
+		{"2", "1"}, // after a 400: that one counts as an execution
+		{"3", "2"},
+	}
+	for i, w := range want {
+		select {
+		case g := <-got:
+			if g != w {
+				t.Fatalf("attempt %d headers = %+v, want %+v", i+1, g, w)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("attempt %d never arrived", i+1)
+		}
 	}
 }
 

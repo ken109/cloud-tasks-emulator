@@ -162,7 +162,7 @@ func (e *Engine) ListQueues(parent string, pageSize int32, pageToken string) ([]
 	}
 	sort.Strings(names)
 
-	page, next, err := paginate(names, pageSize, pageToken)
+	page, next, err := paginate(names, pageSize, pageToken, maxListQueuesPageSize)
 	if err != nil {
 		return nil, "", err
 	}
@@ -331,7 +331,7 @@ func (e *Engine) ListTasks(parent string, pageSize int32, pageToken string) ([]*
 	}
 	sort.Strings(names)
 
-	page, next, err := paginate(names, pageSize, pageToken)
+	page, next, err := paginate(names, pageSize, pageToken, maxListTasksPageSize)
 	if err != nil {
 		return nil, "", err
 	}
@@ -565,13 +565,14 @@ func checkDeadline(d, max time.Duration) error {
 	return nil
 }
 
-// Pagination bounds for List RPCs.
+// Pagination bounds for the List RPCs. Both are documented as "if unspecified,
+// the page size will be the maximum", and the maximum differs per RPC.
 const (
-	defaultPageSize = 100
-	maxPageSize     = 1000
+	maxListQueuesPageSize = 9800
+	maxListTasksPageSize  = 1000
 )
 
-func paginate(names []string, pageSize int32, pageToken string) ([]string, string, error) {
+func paginate(names []string, pageSize int32, pageToken string, max int) ([]string, string, error) {
 	start := 0
 	if pageToken != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(pageToken)
@@ -584,11 +585,8 @@ func paginate(names []string, pageSize int32, pageToken string) ([]string, strin
 		}
 	}
 	size := int(pageSize)
-	if size <= 0 {
-		size = defaultPageSize
-	}
-	if size > maxPageSize {
-		size = maxPageSize
+	if size <= 0 || size > max {
+		size = max
 	}
 	if start > len(names) {
 		start = len(names)

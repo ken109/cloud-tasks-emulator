@@ -49,7 +49,9 @@ retry/backoff and rate-limit policy, just like production.
   like production.
 - Scheduling via `schedule_time`, retries with exponential backoff
   (`RetryConfig`), rate limiting and bounded concurrency (`RateLimits`).
-- Pagination (`page_size` / `page_token`) for `ListQueues` and `ListTasks`.
+- Pagination (`page_size` / `page_token`) for `ListQueues` and `ListTasks`,
+  with the documented sizes: an unspecified page size means the maximum, which
+  is 9800 for queues and 1000 for tasks.
 - Resource-limit validation on `CreateTask`, matching the published limits: 1MB
   HTTP / 100KB App Engine body, headers under 80KB and a URL of at most 2083
   characters for HTTP targets, a body only on a method that may carry one,
