@@ -213,8 +213,10 @@ func TestBuildHTTPRequestHeadersAndAuth(t *testing.T) {
 	if rawHeader(req.Header, "X-CloudTasks-TaskPreviousResponse") != "500" || rawHeader(req.Header, "X-CloudTasks-TaskRetryReason") != "RETURNED_500" {
 		t.Error("prev headers")
 	}
-	if req.Header.Get("Content-Type") != "application/octet-stream" {
-		t.Error("default ct")
+	// "Content-Type won't be set by Cloud Tasks" -- HTTP targets get no
+	// default, unlike App Engine ones.
+	if ct := req.Header.Get("Content-Type"); ct != "" {
+		t.Errorf("http target invented a Content-Type: %q", ct)
 	}
 	if !strings.HasPrefix(req.Header.Get("Authorization"), "Bearer ") {
 		t.Error("oidc auth")
@@ -225,13 +227,6 @@ func TestBuildHTTPRequestHeadersAndAuth(t *testing.T) {
 	req, _ = e.buildRequest(q, task, attemptInfo{number: 1})
 	if req.Header.Get("Content-Type") != "application/json" || !strings.HasPrefix(req.Header.Get("Authorization"), "Bearer ") {
 		t.Error("oauth/explicit ct")
-	}
-	// Header names are case-insensitive, so a lower-cased content type still
-	// counts as one the task chose and must survive the octet-stream default.
-	task.Target.Headers = map[string]string{"content-type": "application/json"}
-	req, _ = e.buildRequest(q, task, attemptInfo{number: 1})
-	if req.Header.Get("Content-Type") != "application/json" {
-		t.Errorf("lower-cased ct = %q", req.Header.Get("Content-Type"))
 	}
 }
 
@@ -262,6 +257,36 @@ func TestAppEngineRequest(t *testing.T) {
 	}
 	if req.Header.Get("User-Agent") != appEngineUserAgent || rawHeader(req.Header, "X-AppEngine-FailFast") != "false" {
 		t.Error("ae headers")
+	}
+	// A body-less task gets no Content-Type: the default is documented as
+	// applying only "if the task has a body".
+	if ct := req.Header.Get("Content-Type"); ct != "" {
+		t.Errorf("body-less App Engine task got Content-Type %q", ct)
+	}
+
+	// "If the task has a body ... the Content-Type header is set to
+	// application/octet-stream".
+	task.Target.Method, task.Target.Body = "POST", []byte("x")
+	req, _ = e.buildRequest(q, task, attemptInfo{number: 1})
+	if ct := req.Header.Get("Content-Type"); ct != "application/octet-stream" {
+		t.Errorf("default ct = %q", ct)
+	}
+
+	// The default is overridable, and header names are case-insensitive, so a
+	// lower-cased spelling counts as one the task chose.
+	task.Target.Headers = map[string]string{"content-type": "application/json"}
+	req, _ = e.buildRequest(q, task, attemptInfo{number: 1})
+	if ct := req.Header.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("lower-cased ct = %q", ct)
+	}
+
+	// "This header can be modified, but Cloud Tasks will append
+	// AppEngine-Google; (+http://code.google.com/appengine) to the modified
+	// User-Agent."
+	task.Target.Headers = map[string]string{"User-Agent": "mine"}
+	req, _ = e.buildRequest(q, task, attemptInfo{number: 1})
+	if ua := req.Header.Get("User-Agent"); ua != "mine "+appEngineUserAgent {
+		t.Errorf("appended user agent = %q", ua)
 	}
 }
 
@@ -636,6 +661,37 @@ func TestValidateDeadlinesAndPull(t *testing.T) {
 	}
 	if mk(&Task{Target: Target{Type: TargetPull, Body: make([]byte, maxHTTPTaskBodySize+1)}}) == nil {
 		t.Error("pull body")
+	}
+}
+
+// TestValidateHTTPTargetLimits covers the limits the HttpRequest reference
+// states outright: a 2083-character URL, headers under 80KB, and a body only on
+// a method that can carry one.
+func TestValidateHTTPTargetLimits(t *testing.T) {
+	e := NewEngine(Config{})
+	q, _ := e.CreateQueue(parent, newQ("q"))
+	mk := func(t0 *Task) error { _, err := e.CreateTask(q.Name, t0); return err }
+
+	long := "http://x/" + strings.Repeat("a", maxHTTPURLLength)
+	if mk(&Task{Target: Target{Type: TargetHTTP, URL: long}}) == nil {
+		t.Error("over-long url accepted")
+	}
+	if mk(&Task{Target: Target{Type: TargetHTTP, URL: "http://x", Headers: map[string]string{"X-Big": strings.Repeat("v", maxHTTPHeaderSize)}}}) == nil {
+		t.Error("over-sized headers accepted")
+	}
+	if mk(&Task{Target: Target{Type: TargetHTTP, URL: "http://x", Method: "GET", Body: []byte("x")}}) == nil {
+		t.Error("body on GET accepted")
+	}
+	// An unset method means POST, which may carry one.
+	if err := mk(&Task{Name: q.Name + "/tasks/implicit-post", Target: Target{Type: TargetHTTP, URL: "http://x", Body: []byte("x")}}); err != nil {
+		t.Errorf("body on an implicit POST: %v", err)
+	}
+	if err := mk(&Task{Name: q.Name + "/tasks/patch", Target: Target{Type: TargetHTTP, URL: "http://x", Method: "patch", Body: []byte("x")}}); err != nil {
+		t.Errorf("body on PATCH: %v", err)
+	}
+	// App Engine targets allow POST and PUT only.
+	if mk(&Task{Target: Target{Type: TargetAppEngine, RelativeURI: "/x", Method: "PATCH", Body: []byte("x")}}) == nil {
+		t.Error("body on an App Engine PATCH accepted")
 	}
 }
 

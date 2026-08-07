@@ -31,7 +31,10 @@ retry/backoff and rate-limit policy, just like production.
   clients that do not speak gRPC, work too.
 - Real HTTP task dispatch for both **HTTP targets** (`HttpRequest`) and
   **App Engine targets** (`AppEngineHttpRequest`).
-- Full Cloud Tasks request headers, with the correct prefix per target type:
+- Full Cloud Tasks request headers, with the correct prefix per target type,
+  and the documented per-target defaults: an App Engine task with a body gets
+  `Content-Type: application/octet-stream` unless it set one, while an HTTP task
+  gets no `Content-Type` at all — "Content-Type won't be set by Cloud Tasks".
   - HTTP targets: `X-CloudTasks-QueueName`, `-TaskName`, `-TaskRetryCount`,
     `-TaskExecutionCount`, `-TaskETA`, and on retries `-TaskPreviousResponse`
     and `-TaskRetryReason`; `User-Agent: Google-Cloud-Tasks`.
@@ -47,8 +50,11 @@ retry/backoff and rate-limit policy, just like production.
 - Scheduling via `schedule_time`, retries with exponential backoff
   (`RetryConfig`), rate limiting and bounded concurrency (`RateLimits`).
 - Pagination (`page_size` / `page_token`) for `ListQueues` and `ListTasks`.
-- Resource-limit validation on `CreateTask` (1MB HTTP / 100KB App Engine body,
-  `schedule_time` ≤ 30 days ahead, `dispatch_deadline` in 15s–30m).
+- Resource-limit validation on `CreateTask`, matching the published limits: 1MB
+  HTTP / 100KB App Engine body, headers under 80KB and a URL of at most 2083
+  characters for HTTP targets, a body only on a method that may carry one,
+  `schedule_time` ≤ 30 days ahead, `dispatch_deadline` in 15s–30m (HTTP) or
+  15s–24h15s (App Engine).
 - Task-name tombstones after deletion/completion and a task TTL, matching the
   Cloud Tasks lifecycle (both durations configurable).
 - Queue pause/resume/purge semantics.
@@ -418,6 +424,10 @@ compatible: **swapping the image name is usually the whole migration.**
 - **Purged task names stay reserved** for the tombstone window, as in
   production. Pass `-hard-reset-on-purge-queue` if your tests purge a queue and
   immediately recreate the same fixed task names.
+- **`Content-Type` follows the target type.** App Engine tasks with a body
+  default to `application/octet-stream`; HTTP tasks are sent exactly the headers
+  they carry, because the reference says Cloud Tasks does not set one. Either
+  default is overridden by the task's own header in any capitalisation.
 - App Engine targets need a reachable host: set one via the task's
   `app_engine_routing.host`, the queue's `app_engine_routing_override.host`, or
   the `-app-engine-host` flag.

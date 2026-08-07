@@ -103,6 +103,28 @@ def main() -> None:
     if headers.get("Content-Type") != "application/json":
         fail(f"Content-Type = {headers.get('Content-Type')!r}")
 
+    # An HTTP task that sets no content type must arrive without one: the
+    # reference is explicit that "Content-Type won't be set by Cloud Tasks" for
+    # HTTP targets, unlike App Engine ones.
+    client.create_task(
+        parent=QUEUE_NAME,
+        task={
+            "http_request": {
+                "url": target_url,
+                "http_method": tasks_v2.HttpMethod.POST,
+                "body": b"bare",
+            }
+        },
+    )
+    try:
+        bare_headers, bare_body = received.get(timeout=30)
+    except queue.Empty:
+        fail("the emulator never dispatched the task with no content type")
+    if bare_body != b"bare":
+        fail(f"dispatched body = {bare_body!r}")
+    if "Content-Type" in bare_headers:
+        fail(f"Cloud Tasks does not set Content-Type on HTTP targets, got {bare_headers['Content-Type']!r}")
+
     # A successfully dispatched task is removed from the queue. The emulator
     # only records that once it has read our 2xx, which is necessarily after
     # the handler handed us the request, so poll rather than assert once.

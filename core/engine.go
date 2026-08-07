@@ -3,8 +3,10 @@ package core
 import (
 	"encoding/base64"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -473,10 +475,13 @@ func (qs *queueState) snapshotLocked() *Queue {
 	return &c
 }
 
-// Cloud Tasks resource limits enforced at task creation.
+// Cloud Tasks resource limits enforced at task creation, as documented on the
+// HttpRequest and AppEngineHttpRequest reference pages.
 const (
 	maxHTTPTaskBodySize      = 1024 * 1024 // 1 MiB for HTTP targets
 	maxAppEngineTaskBodySize = 100 * 1024  // 100 KiB for App Engine targets
+	maxHTTPHeaderSize        = 80 * 1024   // "the size of the headers must be less than 80KB"
+	maxHTTPURLLength         = 2083        // "maximum allowed URL length is 2083 characters after encoding"
 	maxScheduleAhead         = 30 * 24 * time.Hour
 	minDispatchDeadline      = 15 * time.Second
 	maxHTTPDispatchDeadline  = 30 * time.Minute
@@ -495,12 +500,27 @@ func validateCreateTask(t *Task) error {
 		if len(t.Target.Body) > maxHTTPTaskBodySize {
 			return status.Error(codes.InvalidArgument, "task body exceeds the 1MB limit for HTTP targets")
 		}
+		if len(t.Target.URL) > maxHTTPURLLength {
+			return status.Errorf(codes.InvalidArgument, "url exceeds the %d character limit", maxHTTPURLLength)
+		}
+		if headerSize(t.Target.Headers) >= maxHTTPHeaderSize {
+			return status.Error(codes.InvalidArgument, "the size of the headers must be less than 80KB")
+		}
+		// "A request body is allowed only if the HTTP method is POST, PUT, or
+		// PATCH."
+		if err := checkBodyMethod(t.Target, "POST", "PUT", "PATCH"); err != nil {
+			return err
+		}
 	case TargetAppEngine:
 		if err := checkDeadline(t.DispatchDeadline, maxAppEngineDeadline); err != nil {
 			return err
 		}
 		if len(t.Target.Body) > maxAppEngineTaskBodySize {
 			return status.Error(codes.InvalidArgument, "task body exceeds the 100KB limit for App Engine targets")
+		}
+		// "A request body is allowed only if the HTTP method is POST or PUT."
+		if err := checkBodyMethod(t.Target, "POST", "PUT"); err != nil {
+			return err
 		}
 	case TargetPull:
 		if len(t.Target.Body) > maxHTTPTaskBodySize {
@@ -510,6 +530,32 @@ func validateCreateTask(t *Task) error {
 		return status.Error(codes.InvalidArgument, "task must specify a target")
 	}
 	return nil
+}
+
+// headerSize approximates what Cloud Tasks counts against the header limit:
+// the field names and values a task carries.
+func headerSize(headers map[string]string) int {
+	n := 0
+	for k, v := range headers {
+		n += len(k) + len(v)
+	}
+	return n
+}
+
+// checkBodyMethod rejects a body on a method that cannot carry one. An unset
+// method means POST, which is what Cloud Tasks dispatches by default.
+func checkBodyMethod(tg Target, allowed ...string) error {
+	if len(tg.Body) == 0 {
+		return nil
+	}
+	method := tg.Method
+	if method == "" {
+		method = "POST"
+	}
+	if slices.Contains(allowed, strings.ToUpper(method)) {
+		return nil
+	}
+	return status.Errorf(codes.InvalidArgument, "a request body is allowed only if the HTTP method is %s", strings.Join(allowed, ", "))
 }
 
 func checkDeadline(d, max time.Duration) error {

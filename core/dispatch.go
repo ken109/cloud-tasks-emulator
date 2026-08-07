@@ -92,7 +92,24 @@ func (e *Engine) buildAppEngineRequest(q *Queue, t *Task, info attemptInfo) (*ht
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", appEngineUserAgent)
+	// "User-Agent: ... This header can be modified, but Cloud Tasks will append
+	// 'AppEngine-Google; (+http://code.google.com/appengine)' to the modified
+	// User-Agent."
+	if ua := req.Header.Get("User-Agent"); ua != "" && ua != appEngineUserAgent {
+		req.Header.Set("User-Agent", ua+" "+appEngineUserAgent)
+	} else {
+		req.Header.Set("User-Agent", appEngineUserAgent)
+	}
+	// "If the task has a body, Cloud Tasks sets the following headers:
+	// Content-Type: By default, the Content-Type header is set to
+	// 'application/octet-stream'." This is an App Engine rule only -- for HTTP
+	// targets the reference is explicit that "Content-Type won't be set by
+	// Cloud Tasks", so nothing is filled in there. Header names are
+	// case-insensitive, so ask http.Header rather than the raw map: a task
+	// that set "content-type" has already chosen one.
+	if len(t.Target.Body) > 0 && req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/octet-stream")
+	}
 	setSystemHeaders(req, "X-AppEngine", q, t, info)
 	setRawHeader(req.Header, "X-AppEngine-FailFast", "false")
 	return req, nil
@@ -176,12 +193,6 @@ func newRequest(method, rawURL string, body []byte, headers map[string]string) (
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
-	}
-	// Header names are case-insensitive (RFC 9110), so a task that set
-	// "content-type" has already chosen one; look it up through http.Header
-	// rather than the raw map, or the default below would overwrite it.
-	if req.Header.Get("Content-Type") == "" && len(body) > 0 {
-		req.Header.Set("Content-Type", "application/octet-stream")
 	}
 	return req, nil
 }
