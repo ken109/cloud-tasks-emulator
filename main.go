@@ -161,8 +161,13 @@ func run(opts options, stop <-chan struct{}, h hooks) error {
 	emu.Register(grpcServer)
 	reflection.Register(grpcServer)
 
+	// Shutdown must not overtake startup: GracefulStop called before Serve
+	// begins makes Serve return ErrServerStopped, which would turn a Ctrl-C
+	// during the first instants of startup into a non-zero exit.
+	serving := make(chan struct{})
 	go func() {
 		<-stop
+		<-serving
 		if openIDServer != nil {
 			openIDServer.Close()
 		}
@@ -178,6 +183,7 @@ func run(opts options, stop <-chan struct{}, h hooks) error {
 	}
 	log.Printf("Cloud Tasks emulator listening on %s", boundAddr)
 	log.Printf("Set your client's endpoint to %s and use an insecure connection.", boundAddr)
+	close(serving)
 	return grpcServer.Serve(lis)
 }
 

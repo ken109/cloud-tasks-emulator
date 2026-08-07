@@ -339,11 +339,15 @@ func TestRunServesOpenIDDiscovery(t *testing.T) {
 func TestRunServesREST(t *testing.T) {
 	stop := make(chan struct{})
 	restCh := make(chan string, 1)
+	grpcCh := make(chan string, 1)
 	errCh := make(chan error, 1)
 
 	opts := options{host: "127.0.0.1", port: "0", restPort: "0"}
 	go func() {
-		errCh <- run(opts, stop, hooks{restReady: func(addr string) { restCh <- addr }})
+		errCh <- run(opts, stop, hooks{
+			restReady: func(addr string) { restCh <- addr },
+			grpcReady: func(addr string) { grpcCh <- addr },
+		})
 	}()
 
 	var addr string
@@ -352,6 +356,9 @@ func TestRunServesREST(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("REST server never became ready")
 	}
+	// The REST server comes up first; wait for the gRPC one too, so shutting
+	// down does not race the server that run() blocks on.
+	<-grpcCh
 
 	const queue = "projects/p/locations/l/queues/q"
 	resp, err := http.Post("http://"+addr+"/v2/projects/p/locations/l/queues",
@@ -412,16 +419,20 @@ func TestRunReportsSkippedRESTBindings(t *testing.T) {
 
 	stop := make(chan struct{})
 	restCh := make(chan string, 1)
+	grpcCh := make(chan string, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- run(options{host: "127.0.0.1", port: "0", restPort: "0"}, stop,
-			hooks{restReady: func(addr string) { restCh <- addr }})
+		errCh <- run(options{host: "127.0.0.1", port: "0", restPort: "0"}, stop, hooks{
+			restReady: func(addr string) { restCh <- addr },
+			grpcReady: func(addr string) { grpcCh <- addr },
+		})
 	}()
 	select {
 	case <-restCh:
 	case <-time.After(3 * time.Second):
 		t.Fatal("REST server never became ready")
 	}
+	<-grpcCh
 	close(stop)
 	<-errCh
 
