@@ -12,9 +12,13 @@ import (
 // restServer starts the REST surface of a fresh emulator.
 func restServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	h, err := New(Config{}).RESTHandler()
+	h, skipped, err := New(Config{}).RESTHandler()
 	if err != nil {
 		t.Fatalf("RESTHandler: %v", err)
+	}
+	// Both versions must be fully served; a skipped binding is a missing method.
+	if len(skipped) != 0 {
+		t.Fatalf("bindings not served: %v", skipped)
 	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)

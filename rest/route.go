@@ -47,18 +47,20 @@ type route struct {
 	handler    methodHandler
 }
 
-// routesFor derives every HTTP binding declared by s from the compiled protos.
-func routesFor(s Service) ([]*route, error) {
+// routesFor derives every HTTP binding declared by s from the compiled protos,
+// along with the bindings it could not express.
+func routesFor(s Service) ([]*route, []string, error) {
 	d, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(s.Desc.ServiceName))
 	if err != nil {
-		return nil, fmt.Errorf("no compiled descriptor for service %s: %w", s.Desc.ServiceName, err)
+		return nil, nil, fmt.Errorf("no compiled descriptor for service %s: %w", s.Desc.ServiceName, err)
 	}
 	sd, ok := d.(protoreflect.ServiceDescriptor)
 	if !ok {
-		return nil, fmt.Errorf("%s is not a service", s.Desc.ServiceName)
+		return nil, nil, fmt.Errorf("%s is not a service", s.Desc.ServiceName)
 	}
 
 	var routes []*route
+	var skipped []string
 	for i := range sd.Methods().Len() {
 		md := sd.Methods().Get(i)
 		rule, _ := proto.GetExtension(md.Options(), annotations.E_Http).(*annotations.HttpRule)
@@ -70,16 +72,20 @@ func routesFor(s Service) ([]*route, error) {
 		}
 		for _, binding := range append([]*annotations.HttpRule{rule}, rule.GetAdditionalBindings()...) {
 			rt, err := newRoute(binding, md, s.Impl, handler)
+			// A binding this transcoder cannot express costs that one method,
+			// not the whole server: a proto version that introduces one must
+			// not stop the process from starting.
 			if err != nil {
-				return nil, fmt.Errorf("%s.%s: %w", s.Desc.ServiceName, md.Name(), err)
+				skipped = append(skipped, fmt.Sprintf("%s.%s: %v", s.Desc.ServiceName, md.Name(), err))
+				continue
 			}
 			routes = append(routes, rt)
 		}
 	}
 	if len(routes) == 0 {
-		return nil, fmt.Errorf("service %s declares no HTTP bindings", s.Desc.ServiceName)
+		return nil, nil, fmt.Errorf("service %s declares no HTTP binding this transcoder can serve", s.Desc.ServiceName)
 	}
-	return routes, nil
+	return routes, skipped, nil
 }
 
 // handlerFor finds the generated unary handler for method in desc.

@@ -20,6 +20,7 @@ from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import NotFound
 from google.auth.credentials import AnonymousCredentials
 from google.cloud import tasks_v2
+from googleapiclient.discovery import build
 
 REST_ADDR = os.environ.get("REST_ADDR", "http://localhost:8124")
 # The address the emulator should call back on. When the emulator runs in a
@@ -28,6 +29,7 @@ TARGET_HOST = os.environ.get("TARGET_HOST", "127.0.0.1")
 
 PARENT = "projects/conformance/locations/us-central1"
 QUEUE_NAME = f"{PARENT}/queues/python-rest-check"
+DISCOVERY_QUEUE_NAME = f"{PARENT}/queues/python-discovery-check"
 
 received: "queue.Queue" = queue.Queue()
 
@@ -128,7 +130,50 @@ def main() -> None:
         pass
 
     client.delete_queue(name=QUEUE_NAME)
+
+    check_discovery_client()
     print(f"OK: google-cloud-tasks REST transport against {REST_ADDR}")
+
+
+def check_discovery_client() -> None:
+    """Drive the same surface with google-api-python-client.
+
+    A whole class of tooling (goblet, gcloud-style scripts) is built on the
+    discovery client rather than on a GAPIC. It carries its own copy of the
+    Cloud Tasks discovery document, so the only thing it needs from us is that
+    the endpoint behaves like the real one.
+    """
+    service = build(
+        "cloudtasks",
+        "v2",
+        credentials=AnonymousCredentials(),
+        client_options={"api_endpoint": REST_ADDR},
+    )
+    queues = service.projects().locations().queues()
+
+    created = queues.create(
+        parent=PARENT, body={"name": DISCOVERY_QUEUE_NAME}
+    ).execute()
+    if created.get("name") != DISCOVERY_QUEUE_NAME:
+        fail(f"discovery client created {created!r}")
+
+    listed = queues.list(parent=PARENT).execute().get("queues", [])
+    if not any(q["name"] == DISCOVERY_QUEUE_NAME for q in listed):
+        fail(f"created queue is missing from the discovery client's list: {listed!r}")
+
+    task = (
+        queues.tasks()
+        .create(
+            parent=DISCOVERY_QUEUE_NAME,
+            body={"task": {"httpRequest": {"url": "http://127.0.0.1:1/never-answered"}}},
+        )
+        .execute()
+    )
+    if not task["name"].startswith(DISCOVERY_QUEUE_NAME + "/tasks/"):
+        fail(f"discovery client created task {task!r}")
+
+    queues.delete(name=DISCOVERY_QUEUE_NAME).execute()
+    print(f"OK: google-api-python-client (discovery) against {REST_ADDR}")
 
 
 if __name__ == "__main__":

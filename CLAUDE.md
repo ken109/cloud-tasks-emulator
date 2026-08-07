@@ -34,8 +34,8 @@ Layout:
   so only these can catch wire-level mismatches (they found the system-header
   casing bug). `check_oidc.py` additionally verifies a dispatched token with a
   real JWT library, and `check_rest.py` / `check_rest.mjs` drive the REST
-  surface with the clients' own REST transports — the only check that can catch
-  a transcoding mistake. CI runs them against both a built binary and the image.
+  surface with the clients' own REST transports and with the discovery client —
+  the only checks that can catch a transcoding mistake. CI runs them against both a built binary and the image.
 - `docs/` — guides for paths that need more than a README section.
 - `emulator/example_test.go` — the pkg.go.dev examples; they run in CI, so Go
   snippets cannot rot.

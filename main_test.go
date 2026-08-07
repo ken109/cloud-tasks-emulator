@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -385,12 +386,47 @@ func TestRunRESTErrors(t *testing.T) {
 	// shut down on the way out.
 	oldHandler := restHandlerFor
 	defer func() { restHandlerFor = oldHandler }()
-	restHandlerFor = func(*emulator.Emulator) (http.Handler, error) {
-		return nil, errors.New("no HTTP bindings")
+	restHandlerFor = func(*emulator.Emulator) (http.Handler, []string, error) {
+		return nil, nil, errors.New("no HTTP bindings")
 	}
 	opts := options{host: "127.0.0.1", port: "0", restPort: "0", openIDIssuer: "http://127.0.0.1:" + freePort(t)}
 	if err := run(opts, make(chan struct{}), hooks{}); err == nil {
 		t.Error("expected an error when the REST handler cannot be built")
+	}
+}
+
+// TestRunReportsSkippedRESTBindings checks a binding the transcoder cannot
+// serve is announced rather than silently missing.
+func TestRunReportsSkippedRESTBindings(t *testing.T) {
+	oldHandler := restHandlerFor
+	defer func() { restHandlerFor = oldHandler }()
+	restHandlerFor = func(emu *emulator.Emulator) (http.Handler, []string, error) {
+		h, _, err := emu.RESTHandler()
+		return h, []string{"some.Service.Method: unsupported"}, err
+	}
+
+	var logged strings.Builder
+	oldOut := log.Writer()
+	log.SetOutput(&logged)
+	defer log.SetOutput(oldOut)
+
+	stop := make(chan struct{})
+	restCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- run(options{host: "127.0.0.1", port: "0", restPort: "0"}, stop,
+			hooks{restReady: func(addr string) { restCh <- addr }})
+	}()
+	select {
+	case <-restCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("REST server never became ready")
+	}
+	close(stop)
+	<-errCh
+
+	if !strings.Contains(logged.String(), "REST binding not served: some.Service.Method") {
+		t.Errorf("skipped binding was not logged: %q", logged.String())
 	}
 }
 

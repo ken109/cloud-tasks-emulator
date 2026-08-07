@@ -30,19 +30,23 @@ type Service struct {
 	Impl any
 }
 
-// Handler builds an http.Handler serving the HTTP bindings of svcs. It fails
-// rather than silently serving a partial API: a service whose protos carry no
-// usable binding is a programming error, not a request-time 404.
-func Handler(svcs ...Service) (http.Handler, error) {
+// Handler builds an http.Handler serving the HTTP bindings of svcs, and returns
+// the bindings it had to skip so the caller can report them instead of letting
+// the API quietly shrink. A single binding this transcoder cannot express is
+// skipped; a service left with no routes at all is an error, since that is a
+// wiring mistake rather than a gap in one proto.
+func Handler(svcs ...Service) (http.Handler, []string, error) {
 	m := &mux{}
+	var skipped []string
 	for _, s := range svcs {
-		rs, err := routesFor(s)
+		rs, skips, err := routesFor(s)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		m.routes = append(m.routes, rs...)
+		skipped = append(skipped, skips...)
 	}
-	return m, nil
+	return m, skipped, nil
 }
 
 // mux dispatches requests to the first route whose method and path match.
@@ -50,7 +54,13 @@ type mux struct {
 	routes []*route
 }
 
+// maxRequestBody caps how much of a request body is read. This is a local
+// development tool, but an unbounded read is still an easy way to lose the
+// process to one stray request. A variable so tests can lower it.
+var maxRequestBody int64 = 32 << 20
+
 func (m *mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	segs, verb := splitRequestPath(r.URL.EscapedPath())
 	enumInts := wantsEnumNumbers(r)
 	for _, rt := range m.routes {

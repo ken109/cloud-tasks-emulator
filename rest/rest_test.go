@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -77,9 +78,12 @@ func (s *stub) DeleteQueue(_ context.Context, r *taskspb.DeleteQueueRequest) (*e
 func serveStub(t *testing.T) (*stub, func(method, path, body string) (int, string)) {
 	t.Helper()
 	s := &stub{}
-	h, err := Handler(Service{Desc: &taskspb.CloudTasks_ServiceDesc, Impl: s})
+	h, skipped, err := Handler(Service{Desc: &taskspb.CloudTasks_ServiceDesc, Impl: s})
 	if err != nil {
 		t.Fatalf("Handler: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("Cloud Tasks bindings skipped: %v", skipped)
 	}
 	return s, func(method, path, body string) (int, string) {
 		var rdr io.Reader
@@ -201,6 +205,19 @@ func TestServeErrors(t *testing.T) {
 	}
 }
 
+// TestServeOversizedBody covers the cap on how much of a body is read.
+func TestServeOversizedBody(t *testing.T) {
+	_, call := serveStub(t)
+	old := maxRequestBody
+	defer func() { maxRequestBody = old }()
+	maxRequestBody = 8
+
+	if code, body := call(http.MethodPost, "/v2/projects/p/locations/l/queues",
+		`{"name":"projects/p/locations/l/queues/very-long-name"}`); code != http.StatusBadRequest {
+		t.Fatalf("oversized body = %d %s", code, body)
+	}
+}
+
 // TestServeSystemParameters covers the query parameters every Google API
 // accepts and no request message declares.
 func TestServeSystemParameters(t *testing.T) {
@@ -217,6 +234,60 @@ func TestServeUnmarshalableResponse(t *testing.T) {
 	s.queue = &taskspb.Queue{Name: "\xff"}
 	if code, body := call(http.MethodGet, "/v2/"+queueName, ""); code != http.StatusInternalServerError {
 		t.Fatalf("unmarshalable response = %d %s", code, body)
+	}
+}
+
+// mixedServiceDesc registers a synthetic service carrying one binding this
+// transcoder can serve and one it cannot. No real Cloud Tasks proto mixes the
+// two, and the degradation path is only worth having if it is tested.
+func mixedServiceDesc(t *testing.T) *grpc.ServiceDesc {
+	t.Helper()
+	rule := func(path string) *descriptorpb.MethodOptions {
+		opts := &descriptorpb.MethodOptions{}
+		proto.SetExtension(opts, annotations.E_Http, &annotations.HttpRule{
+			Pattern: &annotations.HttpRule_Get{Get: path},
+		})
+		return opts
+	}
+	method := func(name, path string) *descriptorpb.MethodDescriptorProto {
+		return &descriptorpb.MethodDescriptorProto{
+			Name:       proto.String(name),
+			InputType:  proto.String(".google.cloud.tasks.v2.GetQueueRequest"),
+			OutputType: proto.String(".google.cloud.tasks.v2.Queue"),
+			Options:    rule(path),
+		}
+	}
+
+	fd, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
+		Name:    proto.String("rest_testonly_mixed.proto"),
+		Package: proto.String("rest.testonly.v1"),
+		Syntax:  proto.String("proto3"),
+		Dependency: []string{
+			taskspb.File_google_cloud_tasks_v2_cloudtasks_proto.Path(),
+			taskspb.File_google_cloud_tasks_v2_queue_proto.Path(),
+		},
+		Service: []*descriptorpb.ServiceDescriptorProto{{
+			Name: proto.String("Mixed"),
+			Method: []*descriptorpb.MethodDescriptorProto{
+				method("Good", "/testonly/{name=queues/*}"),
+				method("Bad", "/testonly/{name=**}"),
+			},
+		}},
+	}, protoregistry.GlobalFiles)
+	if err != nil {
+		t.Fatalf("build synthetic file: %v", err)
+	}
+	if err := protoregistry.GlobalFiles.RegisterFile(fd); err != nil {
+		t.Fatalf("register synthetic file: %v", err)
+	}
+
+	handler := handlerFor(&taskspb.CloudTasks_ServiceDesc, "GetQueue")
+	return &grpc.ServiceDesc{
+		ServiceName: "rest.testonly.v1.Mixed",
+		Methods: []grpc.MethodDesc{
+			{MethodName: "Good", Handler: handler},
+			{MethodName: "Bad", Handler: handler},
+		},
 	}
 }
 
@@ -459,20 +530,47 @@ func TestNewRouteValidation(t *testing.T) {
 
 func TestHandlerRejectsServicesWithoutBindings(t *testing.T) {
 	// A service with no compiled descriptor at all.
-	if _, err := Handler(Service{Desc: &grpc.ServiceDesc{ServiceName: "no.such.Service"}}); err == nil {
+	if _, _, err := Handler(Service{Desc: &grpc.ServiceDesc{ServiceName: "no.such.Service"}}); err == nil {
 		t.Error("accepted an unknown service")
 	}
 	// A name that resolves to something that is not a service.
-	if _, err := Handler(Service{Desc: &grpc.ServiceDesc{ServiceName: "google.cloud.tasks.v2.Queue"}}); err == nil {
+	if _, _, err := Handler(Service{Desc: &grpc.ServiceDesc{ServiceName: "google.cloud.tasks.v2.Queue"}}); err == nil {
 		t.Error("accepted a message as a service")
 	}
 	// A real service whose protos declare no HTTP bindings.
-	if _, err := Handler(Service{Desc: &reflectionpb.ServerReflection_ServiceDesc}); err == nil {
+	if _, _, err := Handler(Service{Desc: &reflectionpb.ServerReflection_ServiceDesc}); err == nil {
 		t.Error("accepted a service with no bindings")
 	}
-	// A binding this transcoder cannot serve fails the build rather than the
-	// request: google.iam.v1.IAMPolicy binds `{resource=**}`.
-	if _, err := Handler(Service{Desc: &iampb.IAMPolicy_ServiceDesc}); err == nil {
-		t.Error("accepted a multi-segment wildcard binding")
+	// Every binding of google.iam.v1.IAMPolicy uses `{resource=**}`, which this
+	// transcoder cannot express, so the service ends up with no routes at all.
+	// The failure names what was skipped rather than hiding it.
+	_, _, err := Handler(Service{Desc: &iampb.IAMPolicy_ServiceDesc})
+	if err == nil {
+		t.Error("accepted a service whose bindings are all unsupported")
+	}
+}
+
+// TestHandlerSkipsUnsupportedBinding checks the degradation path: a binding
+// this transcoder cannot express costs that method, not the whole server.
+func TestHandlerSkipsUnsupportedBinding(t *testing.T) {
+	routes, skipped, err := routesFor(Service{Desc: &iampb.IAMPolicy_ServiceDesc, Impl: nil})
+	if err == nil {
+		t.Fatal("a service with no serveable binding should still be an error")
+	}
+	if routes != nil || skipped != nil {
+		t.Fatalf("routes=%v skipped=%v on error", routes, skipped)
+	}
+
+	// With at least one serveable binding, the rest are reported and dropped.
+	svc := Service{Desc: mixedServiceDesc(t), Impl: &stub{}}
+	routes, skipped, err = routesFor(svc)
+	if err != nil {
+		t.Fatalf("routesFor: %v", err)
+	}
+	if len(routes) == 0 {
+		t.Fatal("the serveable binding was dropped too")
+	}
+	if len(skipped) != 1 || !strings.Contains(skipped[0], "multi-segment wildcard") {
+		t.Fatalf("skipped = %v", skipped)
 	}
 }

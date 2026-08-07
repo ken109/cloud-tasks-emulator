@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -25,6 +26,10 @@ import (
 
 // logFatalf is a seam so tests can exercise the fatal path without exiting.
 var logFatalf = log.Fatalf
+
+// httpHeaderTimeout bounds how long a client may take to send its headers, so
+// an abandoned connection cannot hold a handler open indefinitely.
+const httpHeaderTimeout = 30 * time.Second
 
 // options holds the resolved server configuration.
 type options struct {
@@ -187,15 +192,18 @@ func startRESTServer(emu *emulator.Emulator, opts options, ready func(addr strin
 	if opts.restPort == "" {
 		return nil, nil
 	}
-	handler, err := restHandlerFor(emu)
+	handler, skipped, err := restHandlerFor(emu)
 	if err != nil {
 		return nil, err
+	}
+	for _, binding := range skipped {
+		log.Printf("REST binding not served: %s", binding)
 	}
 	lis, err := net.Listen("tcp", net.JoinHostPort(opts.host, opts.restPort))
 	if err != nil {
 		return nil, err
 	}
-	srv := &http.Server{Handler: handler}
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: httpHeaderTimeout}
 	// Serve only returns once we close the server at shutdown, and the listener
 	// is ours, so there is no error worth surfacing here.
 	go func() { _ = srv.Serve(lis) }()
@@ -222,7 +230,7 @@ func startOpenIDServer(issuer string, handler http.Handler, ready func(addr stri
 	if err != nil {
 		return nil, err
 	}
-	srv := &http.Server{Handler: handler}
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: httpHeaderTimeout}
 	// Serve only returns once we close the server at shutdown, and the listener
 	// is ours, so there is no error worth surfacing here.
 	go func() { _ = srv.Serve(lis) }()

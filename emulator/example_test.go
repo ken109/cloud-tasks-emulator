@@ -196,7 +196,7 @@ func ExampleEmulator_OpenIDHandler() {
 // ExampleEmulator_RESTHandler serves the REST/JSON API, for clients and tools
 // that do not speak gRPC. The same emulator can serve both surfaces at once.
 func ExampleEmulator_RESTHandler() {
-	handler, err := emulator.New(emulator.Config{}).RESTHandler()
+	handler, _, err := emulator.New(emulator.Config{}).RESTHandler()
 	if err != nil {
 		log.Fatal(err)
 	}

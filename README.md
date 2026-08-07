@@ -264,14 +264,25 @@ const client = new CloudTasksClient({
 });
 ```
 
-The conformance suite drives this surface with the Python and Node clients' own
-REST transports on every commit, so the snippets above are checked rather than
-assumed.
+Discovery-based tooling works too. The emulator serves no discovery document,
+but it does not need to: `google-api-python-client` carries its own copy of the
+Cloud Tasks document, so an endpoint override is the whole setup.
 
-Two limits worth knowing: the standard system parameters (`fields`,
-`prettyPrint`, ...) are accepted and ignored rather than honoured, and no
-discovery document is served, so clients built on `googleapiclient.discovery`
-have nothing to fetch.
+```python
+from googleapiclient.discovery import build
+
+service = build("cloudtasks", "v2",
+                credentials=AnonymousCredentials(),
+                client_options={"api_endpoint": "http://localhost:8124"})
+service.projects().locations().queues().list(parent=PARENT).execute()
+```
+
+The conformance suite drives this surface on every commit with the Python and
+Node clients' own REST transports *and* with the discovery client, so the
+snippets above are checked rather than assumed.
+
+One limit worth knowing: the standard system parameters (`fields`,
+`prettyPrint`, ...) are accepted and ignored rather than honoured.
 
 ## Using in tests
 

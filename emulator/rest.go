@@ -17,7 +17,12 @@ import (
 //
 // Serve it on its own port: a Cloud Tasks client speaks either gRPC or REST,
 // never both on one connection.
-func (e *Emulator) RESTHandler() (http.Handler, error) {
+//
+// The second return value lists any binding the transcoder could not express,
+// which a future version of the protos could introduce. Those methods are
+// missing from the REST surface but cost nothing else, so report them rather
+// than treat them as fatal.
+func (e *Emulator) RESTHandler() (http.Handler, []string, error) {
 	return rest.Handler(
 		rest.Service{Desc: &taskspbv2.CloudTasks_ServiceDesc, Impl: &v2Server{engine: e.engine}},
 		rest.Service{Desc: &taskspbv2beta3.CloudTasks_ServiceDesc, Impl: &v2beta3Server{engine: e.engine}},
