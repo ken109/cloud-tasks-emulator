@@ -226,6 +226,13 @@ func TestBuildHTTPRequestHeadersAndAuth(t *testing.T) {
 	if req.Header.Get("Content-Type") != "application/json" || !strings.HasPrefix(req.Header.Get("Authorization"), "Bearer ") {
 		t.Error("oauth/explicit ct")
 	}
+	// Header names are case-insensitive, so a lower-cased content type still
+	// counts as one the task chose and must survive the octet-stream default.
+	task.Target.Headers = map[string]string{"content-type": "application/json"}
+	req, _ = e.buildRequest(q, task, attemptInfo{number: 1})
+	if req.Header.Get("Content-Type") != "application/json" {
+		t.Errorf("lower-cased ct = %q", req.Header.Get("Content-Type"))
+	}
 }
 
 func TestBuildHTTPRequestOverride(t *testing.T) {

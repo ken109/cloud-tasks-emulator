@@ -75,7 +75,11 @@ def main() -> None:
                 "url": target_url,
                 "http_method": tasks_v2.HttpMethod.POST,
                 "body": b'{"hello":"world"}',
-                "headers": {"Content-Type": "application/json"},
+                # Deliberately lower-cased: header names are case-insensitive,
+                # and the emulator must not overwrite it with its
+                # application/octet-stream default. The Node check sends the
+                # canonical spelling, so between them both paths are covered.
+                "headers": {"content-type": "application/json"},
             }
         },
     )

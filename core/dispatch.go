@@ -177,7 +177,10 @@ func newRequest(method, rawURL string, body []byte, headers map[string]string) (
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	if _, ok := headers["Content-Type"]; !ok && len(body) > 0 {
+	// Header names are case-insensitive (RFC 9110), so a task that set
+	// "content-type" has already chosen one; look it up through http.Header
+	// rather than the raw map, or the default below would overwrite it.
+	if req.Header.Get("Content-Type") == "" && len(body) > 0 {
 		req.Header.Set("Content-Type", "application/octet-stream")
 	}
 	return req, nil
