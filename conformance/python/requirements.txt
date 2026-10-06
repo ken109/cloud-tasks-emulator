@@ -1,4 +1,4 @@
-google-cloud-tasks>=2.24.0
-grpcio>=1.83.0
-pyjwt[crypto]>=2.13.0
-google-api-python-client>=2.198.0
+google-cloud-tasks>=2.26.0
+grpcio>=1.84.0
+pyjwt[crypto]>=2.15.1
+google-api-python-client>=2.201.0
