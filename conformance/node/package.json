@@ -7,8 +7,8 @@
     "check": "node check.mjs"
   },
   "dependencies": {
-    "@google-cloud/tasks": "^7.2.1",
-    "@grpc/grpc-js": "^1.14.5",
-    "google-auth-library": "11.1.0"
+    "@google-cloud/tasks": "^7.3.0",
+    "@grpc/grpc-js": "^1.14.6",
+    "google-auth-library": "11.3.1"
   }
 }
